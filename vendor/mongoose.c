@@ -21175,11 +21175,11 @@ struct mg_connection *mg_ws_connect(struct mg_mgr *mgr, const char *url,
     mg_xprintf(mg_pfn_iobuf, &c->send,
                "GET %s HTTP/1.1\r\n"
                "Upgrade: websocket\r\n"
-               "Host: %.*s\r\n"
+               "Host: %.*s:%u\r\n"
                "Connection: Upgrade\r\n"
                "Sec-WebSocket-Version: 13\r\n"
                "Sec-WebSocket-Key: %s\r\n",
-               mg_url_uri(url), (int) host.len, host.buf, key);
+               mg_url_uri(url), (int) host.len, host.buf, mg_url_port(url), key);
     if (fmt != NULL) {
       va_list ap;
       va_start(ap, fmt);
