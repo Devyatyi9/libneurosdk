@@ -5,6 +5,20 @@ project(neurosdk VERSION 0.2.1)
 include(GNUInstallDirs)
 
 option(NEURO_BUILD_STATIC "Build the library statically" ON)
+option(NEURO_BUILD_TESTS "Build test executables" OFF)
+option(NEURO_BUILD_EXAMPLES "Build example executables" OFF)
+option(NEURO_SANITIZE "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+if(NEURO_SANITIZE)
+	if(MSVC)
+		add_compile_options(/fsanitize=address /Zi)
+		add_link_options(/DEBUG)
+		message(STATUS "MSVC ASan: add clang_rt DLL dir (Hostx64/x86) to PATH at runtime")
+	else()
+		add_compile_options(-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g)
+		add_link_options(-fsanitize=address -fsanitize=undefined)
+	endif()
+endif()
 
 execute_process(
 	COMMAND git rev-parse HEAD
@@ -17,7 +31,10 @@ if(NOT LIB_BUILD_HASH)
 	set(LIB_BUILD_HASH "unknown")
 endif()
 
-set(SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/neurosdk.c)
+set(SOURCES
+	${CMAKE_CURRENT_SOURCE_DIR}/src/neurosdk.c
+	${CMAKE_CURRENT_SOURCE_DIR}/src/ws_client.c
+)
 
 if(NEURO_BUILD_STATIC)
 	add_library(${PROJECT_NAME} STATIC ${SOURCES})
@@ -31,12 +48,17 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 )
 target_include_directories(${PROJECT_NAME} PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/vendor
+	${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
 	LIB_VERSION=${PROJECT_VERSION}
 	LIB_BUILD_HASH=${LIB_BUILD_HASH}
 )
+
+if(WIN32)
+	target_link_libraries(${PROJECT_NAME} PRIVATE ws2_32 bcrypt)
+endif()
 
 configure_file(
 	${CMAKE_CURRENT_SOURCE_DIR}/neurosdk.pc.in
@@ -52,6 +74,30 @@ install(TARGETS ${PROJECT_NAME}
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/neurosdk.h
 	DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+
+if(NEURO_BUILD_TESTS)
+	add_executable(echo_test tests/echo_test.c)
+	target_include_directories(echo_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+	target_link_libraries(echo_test PRIVATE ${PROJECT_NAME})
+
+	add_executable(integration_test tests/integration_test.c)
+	target_include_directories(integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+	target_link_libraries(integration_test PRIVATE ${PROJECT_NAME})
+
+	add_executable(fuzzing_client tests/fuzzing_client.c)
+	target_include_directories(fuzzing_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+	target_link_libraries(fuzzing_client PRIVATE ${PROJECT_NAME})
+endif()
+
+# Examples are not yet ported to the CMake build (pre-existing CRT linkage
+# issues with sprintf/_vscprintf/vsnprintf_s). Enable once fixed.
+# if(NEURO_BUILD_EXAMPLES)
+# 	add_executable(simple_example examples/simple.c)
+# 	target_link_libraries(simple_example PRIVATE ${PROJECT_NAME})
+# 	add_executable(tictactoe_example examples/tictactoe.c)
+# 	target_link_libraries(tictactoe_example PRIVATE ${PROJECT_NAME})
+# endif()
+
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/neurosdk.pc
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
 )

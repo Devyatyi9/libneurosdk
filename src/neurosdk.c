@@ -2,6 +2,9 @@
 
 #include <stddef.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <ctype.h>
 #include <string.h>
 #include <time.h>
 
@@ -19,7 +22,7 @@
 #endif
 
 #include <json.h>
-#include <mongoose.h>
+#include "ws_client.h"
 
 #define ENVIRONMENT_VARIABLE_NAME "NEURO_SDK_WS_URL"
 #define MESSAGE_QUEUE_SIZE 10
@@ -123,8 +126,7 @@ typedef struct context {
 	int message_queue_size;
 	int message_queue_cap;
 
-	struct mg_mgr mgr;
-	struct mg_connection *conn;
+	ws_t *ws;
 
 	mtx_t out_mtx;
 	char **pending_messages;
@@ -403,62 +405,56 @@ cleanup:
 	return res;
 }
 
-static void connection_fn_(struct mg_connection *c, int ev, void *ev_data) {
-	context_t *ctx = (context_t *)c->fn_data;
+static void ws_on_open(ws_t *ws, void *userdata) {
+	context_t *ctx = (context_t *)userdata;
+	LOG_INFO(ctx, "WebSocket connection opened successfully.");
+	ctx->connected = true;
+}
 
-	ctx->conn_err = NeuroSDK_None;
+static void ws_on_message(ws_t *ws, const char *data, size_t len, int binary,
+                          void *userdata) {
+	context_t *ctx = (context_t *)userdata;
 
-	if (ev == MG_EV_HTTP_MSG) {
-		mg_ws_upgrade(c, ev_data, NULL);
+	if (binary) {
+		LOG_ERROR(ctx, "Received binary (non-plaintext) data from server!");
+		ctx->conn_err = NeuroSDK_ReceivedBinary;
 		return;
 	}
-	if (ev == MG_EV_ERROR || ev == MG_EV_CLOSE) {
-		LOG_WARN(ctx,
-		         "Connection closed or error occurred (ev=%d). Marking "
-		         "as disconnected.",
-		         ev);
-		ctx->connected = false;
-		return;
-	}
-	if (ev == MG_EV_WS_OPEN) {
-		LOG_INFO(ctx, "Websocket connection opened successfully.");
-		ctx->connected = true;
-		return;
-	}
-	if (ev == MG_EV_WS_MSG) {
-		struct mg_ws_message *wm = (struct mg_ws_message *)ev_data;
-		for (size_t i = 0; i < wm->data.len; i++) {
-			if (!isprint((unsigned char)wm->data.buf[i]) &&
-			    !isspace((unsigned char)wm->data.buf[i])) {
-				LOG_ERROR(ctx, "Received binary (non-plaintext) data from server!");
-				ctx->conn_err = NeuroSDK_ReceivedBinary;
-				return;
-			}
+	for (size_t i = 0; i < len; i++) {
+		if (!isprint((unsigned char)data[i]) &&
+		    !isspace((unsigned char)data[i])) {
+			LOG_ERROR(ctx, "Received binary (non-plaintext) data from server!");
+			ctx->conn_err = NeuroSDK_ReceivedBinary;
+			return;
 		}
-		neurosdk_message_t msg;
-		LOG_DEBUG(ctx, "Received message: %.*s", (int)wm->data.len, wm->data.buf);
-		ctx->conn_err = parse_s2c_json(ctx, &msg, wm->data.buf, (int)wm->data.len);
-		if (!ctx->conn_err) {
-			if (ctx->message_queue_size == ctx->message_queue_cap) {
-				LOG_ERROR(ctx, "Message queue is full! (NeuroSDK_MessageQueueFull).");
-				ctx->conn_err = NeuroSDK_MessageQueueFull;
-				return;
-			}
-			ctx->message_queue[ctx->message_queue_size++] = msg;
+	}
+	neurosdk_message_t msg;
+	LOG_DEBUG(ctx, "Received message: %.*s", (int)len, data);
+	ctx->conn_err = parse_s2c_json(ctx, &msg, data, (int)len);
+	if (!ctx->conn_err) {
+		if (ctx->message_queue_size == ctx->message_queue_cap) {
+			LOG_ERROR(ctx, "Message queue is full! (NeuroSDK_MessageQueueFull).");
+			ctx->conn_err = NeuroSDK_MessageQueueFull;
+			return;
 		}
+		ctx->message_queue[ctx->message_queue_size++] = msg;
+	}
+}
 
-		c->recv.len = 0;
-	} else if (ev == MG_EV_WAKEUP) {
-		mtx_lock(&ctx->out_mtx);
-		for (int i = 0; i < ctx->pending_messages_size; i++) {
-			char *msg = ctx->pending_messages[i];
-			LOG_DEBUG(ctx, "Sending message: %s", msg);
-			mg_ws_send(c, msg, strlen(msg), WEBSOCKET_OP_TEXT);
-			free(msg);
-		}
-		ctx->pending_messages_size = 0;
-		mtx_unlock(&ctx->out_mtx);
-	}
+static void ws_on_close(ws_t *ws, uint16_t code, const char *reason,
+                        size_t reason_len, void *userdata) {
+	context_t *ctx = (context_t *)userdata;
+	LOG_WARN(ctx, "Connection closed (code=%u, reason=%.*s). Marking as "
+	              "disconnected.",
+	         code, (int)reason_len, reason);
+	ctx->connected = false;
+}
+
+static void ws_on_error(ws_t *ws, const char *msg, void *userdata) {
+	context_t *ctx = (context_t *)userdata;
+	LOG_WARN(ctx, "WebSocket error: %s", msg);
+	ctx->connected = false;
+	ctx->conn_err = NeuroSDK_ConnectionError;
 }
 
 NEUROSDK_EXPORT neurosdk_error_e
@@ -512,38 +508,39 @@ neurosdk_context_create(neurosdk_context_t *ctx,
 		goto cleanup;
 	}
 
-	mg_mgr_init(&context->mgr);
-	mg_log_set(MG_LL_NONE);
-	mg_wakeup_init(&context->mgr);
+	ws_callbacks_t cbs = {
+	    .on_open = ws_on_open,
+	    .on_message = ws_on_message,
+	    .on_close = ws_on_close,
+	    .on_error = ws_on_error,
+	    .userdata = context,
+	};
 
 	if (mtx_init(&context->out_mtx, mtx_plain) != thrd_success) {
 		res = NeuroSDK_Internal;
-		goto cleanup2;
+		goto cleanup;
 	}
-;
-	context->conn = mg_ws_connect(&context->mgr, fetched_url, connection_fn_,
-	                              (void *)context, NULL);
 
-	if (!context->conn) {
+	if (ws_connect(&context->ws, fetched_url, cbs) != 0) {
 		res = NeuroSDK_ConnectionError;
-		goto cleanup3;
+		goto cleanup_mtx;
 	}
 
 	for (int i = 0; i < 10 && !context->connected; i++) {
-		mg_mgr_poll(&context->mgr, 300);
+		ws_poll(context->ws, 300);
 	}
 	if (!context->connected) {
 		res = NeuroSDK_ConnectionError;
-		goto cleanup3;
+		goto cleanup_ws;
 	}
 
 	(*ctx) = (neurosdk_context_t)context;
 	return res;
 
-cleanup3:
+cleanup_ws:
+	ws_destroy(context->ws);
+cleanup_mtx:
 	mtx_destroy(&context->out_mtx);
-cleanup2:
-	mg_mgr_free(&context->mgr);
 cleanup:
 	free(context->pending_messages);
 	free(context->message_queue);
@@ -561,8 +558,15 @@ neurosdk_context_destroy(neurosdk_context_t *ctx) {
 
 	LOG_DEBUG(context, "Destroying NeuroSDK context.");
 
+	ws_destroy(context->ws);
+
+	mtx_lock(&context->out_mtx);
+	for (int i = 0; i < context->pending_messages_size; i++) {
+		free(context->pending_messages[i]);
+	}
+	context->pending_messages_size = 0;
+	mtx_unlock(&context->out_mtx);
 	mtx_destroy(&context->out_mtx);
-	mg_mgr_free(&context->mgr);
 
 	free(context->pending_messages);
 	free(context->message_queue);
@@ -582,16 +586,28 @@ neurosdk_context_poll(neurosdk_context_t *ctx,
 	}
 	context_t *context = (context_t *)(*ctx);
 
-	if (!context->conn) {
+	if (!context->ws) {
 		LOG_ERROR(context,
-		          "neurosdk_context_poll called but 'conn' is NULL. Context may "
+		          "neurosdk_context_poll called but 'ws' is NULL. Context may "
 		          "be uninitialized.");
 		return NeuroSDK_Uninitialized;
 	}
 
 	LOG_DEBUG(context, "Polling context for new messages.");
 
-	mg_mgr_poll(&context->mgr, context->poll_ms);
+	context->conn_err = NeuroSDK_None;
+	ws_poll(context->ws, context->poll_ms);
+
+	/* Flush any queued outgoing messages */
+	mtx_lock(&context->out_mtx);
+	for (int i = 0; i < context->pending_messages_size; i++) {
+		char *msg = context->pending_messages[i];
+		LOG_DEBUG(context, "Sending message: %s", msg);
+		ws_send(context->ws, msg, strlen(msg));
+		free(msg);
+	}
+	context->pending_messages_size = 0;
+	mtx_unlock(&context->out_mtx);
 
 	if (context->conn_err) {
 		LOG_ERROR(context, "Connection error during poll: %s",
@@ -639,9 +655,9 @@ neurosdk_context_send(neurosdk_context_t *ctx, neurosdk_message_t *msg) {
 		return NeuroSDK_Uninitialized;
 	}
 	context_t *context = (context_t *)(*ctx);
-	if (!context->conn) {
+	if (!context->ws) {
 		LOG_ERROR(context,
-		          "neurosdk_context_send: invalid context (conn is NULL).");
+		          "neurosdk_context_send: invalid context (ws is NULL).");
 		return NeuroSDK_Uninitialized;
 	}
 	if (!neurosdk_context_connected(ctx)) {
@@ -956,11 +972,6 @@ neurosdk_context_send(neurosdk_context_t *ctx, neurosdk_message_t *msg) {
 	}
 	mtx_unlock(&context->out_mtx);
 
-	mg_wakeup(&context->mgr, context->conn->id, NULL, 0);
-
-	mg_mgr_poll(&context->mgr, context->poll_ms);
-	mg_mgr_poll(&context->mgr, context->poll_ms);
-
 	return NeuroSDK_None;
 }
 
@@ -988,5 +999,4 @@ neurosdk_message_destroy(neurosdk_message_t *msg) {
 	return NeuroSDK_None;
 }
 
-#include "mongoose.c"
 #include "tinycthread.c"

@@ -1,6 +1,4 @@
 .DS_Store
-src/mongoose.c
-src/mongoose.h
 src/tinycthread.c
 src/tinycthread.h
 src/json.h
@@ -23,3 +21,4 @@ examples/tictactoe
 .direnv
 [Bb]uild*
 result
+autobahn-reports/*
