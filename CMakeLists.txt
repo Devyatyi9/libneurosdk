@@ -20,6 +20,12 @@ if(NEURO_SANITIZE)
 	endif()
 endif()
 
+if(MSVC)
+	add_compile_options(/W4 /permissive- /std:c11)
+else()
+	add_compile_options(-Wall -Wextra -Wpedantic -Wimplicit-fallthrough -std=gnu11)
+endif()
+
 execute_process(
 	COMMAND git rev-parse HEAD
 	WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}

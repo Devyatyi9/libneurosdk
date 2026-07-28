@@ -11,9 +11,16 @@
 /* ================================================================== */
 #if defined(_WIN32)
   #define WS_PLATFORM_WIN 1
+  #if defined(_MSC_VER)
+    #pragma warning(push)
+    #pragma warning(disable : 5105)
+  #endif
   #include <winsock2.h>
   #include <ws2tcpip.h>
   #include <bcrypt.h>
+  #if defined(_MSC_VER)
+    #pragma warning(pop)
+  #endif
   /* MSVC deprecates POSIX names; map to ISO C equivalents */
   #define strncasecmp _strnicmp
   #define strdup _strdup
@@ -36,6 +43,18 @@
   typedef int SOCKET;
 #else
   #error "Unsupported platform"
+#endif
+
+/*
+ * Fallthrough annotation — MSVC doesn't support __attribute__ for C,
+ * GCC 7+ and Clang do. C23 [[fallthrough]] is not yet universally
+ * available in MSVC's C mode, so we stick with the attribute syntax
+ * guarded to a no-op on Windows compilers that lack it.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+  #define WS_FALLTHROUGH __attribute__((fallthrough))
+#else
+  #define WS_FALLTHROUGH (void)0
 #endif
 
 /* Fixed timeout for blocking-until-writable retries inside "send all".
@@ -454,7 +473,7 @@ static int parse_upgrade_response(const char *buf, size_t len, size_t *header_le
 
   /* Verify Upgrade: websocket and Connection: Upgrade (§4.1 val.2-3) */
   int has_upgrade = 0, has_conn = 0;
-  for (size_t i = 9; i + 2 < *header_len_out; i++) {
+  for (size_t i = 9; i + 11 < *header_len_out; i++) {
     if (strncasecmp(buf + i, "upgrade:", 8) == 0) {
       const char *v = buf + i + 8;
       while (*v == ' ' || *v == '\t') v++;
@@ -702,7 +721,7 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 
       ws->fd = s;
       ws->state = WS_STATE_UPGRADING;
-      /* fall through to UPGRADING — poll for connect completion */
+      WS_FALLTHROUGH;
     }
 
     /* ---- UPGRADING: wait for TCP connect, then send HTTP upgrade ---- */

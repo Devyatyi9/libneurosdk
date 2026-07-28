@@ -8,7 +8,14 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(_MSC_VER)
+  #pragma warning(push)
+  #pragma warning(disable : 5105)
+#endif
 #include "tinycthread.h"
+#if defined(_MSC_VER)
+  #pragma warning(pop)
+#endif
 
 #ifndef unreachable
 #if defined(__GNUC__)

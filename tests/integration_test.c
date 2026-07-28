@@ -52,7 +52,7 @@ static void t_on_message(ws_t *ws, const char *data, size_t len, int binary, voi
 }
 
 static void t_on_close(ws_t *ws, uint16_t code, const char *reason, size_t reason_len, void *userdata) {
-  (void)ws; (void)userdata;
+  (void)ws; (void)reason; (void)reason_len; (void)userdata;
   fprintf(stderr, "  close code=%u\n", code);
   test_got_close = 1;
 }
