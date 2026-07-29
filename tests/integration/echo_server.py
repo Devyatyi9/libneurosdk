@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Minimal WebSocket echo server for testing ws_client."""
+"""Minimal WebSocket echo server for testing ws_client.
+
+Requires websockets>=10 (single-arg echo handler).
+Install: pip install "websockets>=10"
+"""
 import asyncio, sys, websockets
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 9001

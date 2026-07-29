@@ -4,7 +4,10 @@
 #include <stdlib.h>
 
 #ifdef _WIN32
+#pragma warning(push)
+#pragma warning(disable : 5105)
 #include <windows.h>
+#pragma warning(pop)
 #define SLEEP_MS(x) Sleep(x)
 #else
 #include <unistd.h>
@@ -57,11 +60,13 @@ int main(int argc, char *argv[]) {
   }
   printf("[info] Connecting to %s ...\n", url);
 
-  /* Wait for connection */
-  while (!connected && !got_error) {
+  /* Wait for connection (max 10s) */
+  int timeout = 100; /* 100ms per poll, 100 iterations = 10s */
+  while (!connected && !got_error && timeout-- > 0) {
     ws_poll(ws, 100);
   }
   if (got_error) { ws_destroy(ws); return 1; }
+  if (!connected) { fprintf(stderr, "timeout waiting for connect\n"); ws_destroy(ws); return 1; }
 
   /* Send a message */
   const char *msg = "Hello, WebSocket!";
@@ -72,9 +77,13 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  /* Wait for echo */
-  while (!got_message && !got_close && !got_error) {
+  /* Wait for echo (max 10s) */
+  timeout = 100;
+  while (!got_message && !got_close && !got_error && timeout-- > 0) {
     ws_poll(ws, 100);
+  }
+  if (!got_message && !got_error) {
+    fprintf(stderr, "timeout waiting for echo\n");
   }
 
   if (got_message) {

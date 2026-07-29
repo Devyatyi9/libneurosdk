@@ -1,9 +1,9 @@
 """Autobahn fuzzingserver runner for ws_client.
 
 Usage:
-    python tests/run_tests.py                   # localhost:9001, skip server start on Win/macOS
-    python tests/run_tests.py 192.168.1.10      # remote host:9001
-    python tests/run_tests.py 192.168.1.10 9002 # remote host:9002
+    python tests/autobahn/run_tests.py                   # localhost:9001, skip server start on Win/macOS
+    python tests/autobahn/run_tests.py 192.168.1.10      # remote host:9001
+    python tests/autobahn/run_tests.py 192.168.1.10 9002 # remote host:9002
 
 On Linux, starts Autobahn fuzzingserver via Docker automatically.
 On Windows/macOS, assumes the server is already running (user starts it manually).
@@ -45,12 +45,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Find fuzzing_client binary in common build directories
 BIN = None
 for d in ["build", "build-asan", "build-release"]:
-    exe = os.path.join(HERE, "..", d, "Release", "fuzzing_client.exe") if sys.platform == "win32" else os.path.join(HERE, "..", d, "fuzzing_client")
+    exe = os.path.join(HERE, "..", "..", d, "Release", "fuzzing_client.exe") if sys.platform == "win32" else os.path.join(HERE, "..", "..", d, "fuzzing_client")
     if os.path.exists(exe):
         BIN = exe
         break
 if not BIN:
-    BIN = os.path.join(HERE, "..", "build", "fuzzing_client") if sys.platform != "win32" else os.path.join(HERE, "..", "build", "Release", "fuzzing_client.exe")
+    BIN = os.path.join(HERE, "..", "..", "build", "fuzzing_client") if sys.platform != "win32" else os.path.join(HERE, "..", "..", "build", "Release", "fuzzing_client.exe")
     print(f"WARNING: binary not found, will try {BIN}")
 
 TOTAL_CASES = 247

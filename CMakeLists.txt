@@ -82,15 +82,15 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/neurosdk.h
 )
 
 if(NEURO_BUILD_TESTS)
-	add_executable(echo_test tests/echo_test.c)
+	add_executable(echo_test tests/integration/echo_test.c)
 	target_include_directories(echo_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 	target_link_libraries(echo_test PRIVATE ${PROJECT_NAME})
 
-	add_executable(integration_test tests/integration_test.c)
+	add_executable(integration_test tests/integration/integration_test.c)
 	target_include_directories(integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 	target_link_libraries(integration_test PRIVATE ${PROJECT_NAME})
 
-	add_executable(fuzzing_client tests/fuzzing_client.c)
+	add_executable(fuzzing_client tests/autobahn/fuzzing_client.c)
 	target_include_directories(fuzzing_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 	target_link_libraries(fuzzing_client PRIVATE ${PROJECT_NAME})
 endif()
@@ -103,6 +103,10 @@ if(NEURO_BUILD_EXAMPLES)
 	add_executable(tictactoe_example examples/tictactoe.c)
 	target_include_directories(tictactoe_example PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 	target_link_libraries(tictactoe_example PRIVATE ${PROJECT_NAME})
+
+	add_executable(long_session tests/perf/long_session.c)
+	target_include_directories(long_session PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+	target_link_libraries(long_session PRIVATE ${PROJECT_NAME})
 endif()
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/neurosdk.pc

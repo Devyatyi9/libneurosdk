@@ -4,7 +4,10 @@
 #include <stdlib.h>
 
 #ifdef _WIN32
+#pragma warning(push)
+#pragma warning(disable : 5105)
 #include <windows.h>
+#pragma warning(pop)
 #define SLEEP_MS(x) Sleep(x)
 #else
 #include <unistd.h>
@@ -66,20 +69,23 @@ static void t_on_error(ws_t *ws, const char *msg, void *userdata) {
 static int run_one(const char *url, const char *payload, size_t len, int binary) {
   test_connected = 0; test_got_msg = 0; test_got_close = 0; test_got_error = 0;
   test_ctx_t ctx = { payload, len, binary };
+  int timeout;
 
   ws_callbacks_t cbs = { t_on_open, t_on_message, t_on_close, t_on_error, &ctx };
 
   ws_t *ws = NULL;
   if (ws_connect(&ws, url, cbs) != 0) return -1;
 
-  while (!test_connected && !test_got_error) ws_poll(ws, 100);
-  if (!test_connected) { ws_destroy(ws); return -1; }
+  timeout = 100;
+  while (!test_connected && !test_got_error && timeout-- > 0) ws_poll(ws, 100);
+  if (!test_connected) { fprintf(stderr, "  timeout waiting for connect\n"); ws_destroy(ws); return -1; }
 
   int rc = binary ? ws_send_binary(ws, payload, len) : ws_send(ws, payload, len);
   if (rc != 0) { ws_destroy(ws); return -1; }
 
-  while (!test_got_msg && !test_got_close && !test_got_error) ws_poll(ws, 100);
-  if (!test_got_msg) { ws_destroy(ws); return -1; }
+  timeout = 100;
+  while (!test_got_msg && !test_got_close && !test_got_error && timeout-- > 0) ws_poll(ws, 100);
+  if (!test_got_msg) { fprintf(stderr, "  timeout waiting for echo\n"); ws_destroy(ws); return -1; }
 
   ws_close(ws);
   for (int i = 0; i < 10 && ws_state(ws) == WS_STATE_CLOSING; i++)
