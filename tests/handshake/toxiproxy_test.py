@@ -154,6 +154,9 @@ def run_pre_connect(toxic_name, echo_test_bin, proxy_port, up_port):
     print(f"Running: {echo_test_bin} {url}")
     rc = subprocess.call([echo_test_bin, url], env=build_env(echo_test_bin))
     print(f"echo_test exit code: {rc}")
+    # For timeout/reset toxics, echo_test SHOULD fail (connection killed)
+    if toxic_name in ("timeout", "reset"):
+        return 0 if rc != 0 else 1
     return rc
 
 

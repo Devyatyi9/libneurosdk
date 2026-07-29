@@ -76,7 +76,7 @@ def main():
     end = time.time() + hours * 3600
     exe = find_echo_test()
 
-    print(f"Multi-connection long-run: {exe} → {url}")
+    print(f"Multi-connection long-run: {exe} -> {url}")
     print(f"Duration: {hours}h, timeout: {timeout}s/iter")
     print(f"End: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end))}")
     print()
