@@ -27,6 +27,12 @@ def pe_arch(path):
 def build_env(bin_path):
     """Add MSVC ASan DLL directory to PATH based on binary architecture."""
     env = os.environ.copy()
+    # Use ASAN_DLL_DIR from CI if set
+    asan_dir = os.environ.get("ASAN_DLL_DIR")
+    if asan_dir and os.path.isdir(asan_dir):
+        env["PATH"] = asan_dir + os.pathsep + env["PATH"]
+        return env
+
     msvc_root = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC"
     versions = sorted(glob.glob(os.path.join(msvc_root, "*")), reverse=True)
 

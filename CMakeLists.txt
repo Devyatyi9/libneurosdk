@@ -27,7 +27,7 @@ endif()
 if(MSVC)
 	add_compile_options(/W4 /permissive- /std:c11)
 else()
-	add_compile_options(-Wall -Wextra -Wpedantic -Wimplicit-fallthrough=5 -std=gnu11)
+	add_compile_options(-Wall -Wextra -Wpedantic -Wimplicit-fallthrough -std=gnu11)
 endif()
 
 execute_process(
