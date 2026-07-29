@@ -57,8 +57,16 @@ def main():
         except Exception:
             toxiproxy_bin = os.environ.get("TOXIPROXY_BIN")
             if not toxiproxy_bin:
-                import shutil
-                toxiproxy_bin = shutil.which("toxiproxy-server") or "toxiproxy-server"
+                candidates = ["toxiproxy-server",
+                              "/tmp/toxiproxy-server",
+                              r"C:\ProgramData\toxiproxy\toxiproxy-server.exe"]
+                for c in candidates:
+                    if os.path.isfile(c):
+                        toxiproxy_bin = c
+                        break
+                if not toxiproxy_bin:
+                    import shutil
+                    toxiproxy_bin = shutil.which("toxiproxy-server") or "toxiproxy-server"
             toxiproxy = subprocess.Popen([toxiproxy_bin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(2)
 

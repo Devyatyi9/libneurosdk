@@ -37,7 +37,7 @@ PROXY_PORT = 19002
 
 TOXICS = {
     "slicer":  {"type": "slicer",  "attributes": {"average_size": 1, "size_variation": 0}},
-    "latency": {"type": "latency", "attributes": {"latency": 5000, "jitter": 1000}},
+    "latency": {"type": "latency", "attributes": {"latency": 3000, "jitter": 500}},
     "timeout": {"type": "timeout", "attributes": {"timeout": 500}},
     "reset":   {"type": "reset_peer", "attributes": {}},
     "bandwidth": {"type": "bandwidth", "attributes": {"rate": 10}},  # 10 KB/s

@@ -155,7 +155,7 @@ jobs:
         ${{ matrix.os == 'windows-latest' && 'Start-Process -NoNewWindow -FilePath "$env:ProgramData\toxiproxy\toxiproxy-server.exe"' || '/tmp/toxiproxy-server &' }}
         sleep 2
 
-    - name: Run Toxiproxy × slicer
+    - name: Run Toxiproxy tests
       if: matrix.asan
       run: |
         python tests/handshake/toxiproxy_test.py slicer pre ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }}
@@ -163,10 +163,6 @@ jobs:
         python tests/handshake/toxiproxy_test.py timeout pre ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }}
         python tests/handshake/toxiproxy_test.py reset pre ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }}
         python tests/handshake/toxiproxy_test.py bandwidth pre ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }}
-
-    - name: Run Toxiproxy × bad_handshake
-      if: matrix.asan
-      run: |
         python tests/handshake/bad_handshake_toxiproxy_test.py ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }}
 
     - name: Stop background servers
