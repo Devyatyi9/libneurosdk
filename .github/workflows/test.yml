@@ -1,6 +1,9 @@
 name: Build and Test
 
-on: [push, pull_request]
+on:
+  workflow_dispatch:
+  #push:
+  pull_request:
 
 jobs:
   test:
@@ -90,6 +93,10 @@ jobs:
         ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }} ws://127.0.0.1:9002/
         ${{ matrix.asan && 'python tests/perf/long_run.py ws://127.0.0.1:9002/ 0.083 30' || '' }}
 
+    - name: Stalled TCP test (listen-only server)
+      run: |
+        python tests/handshake/listen_only_test.py ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }}
+
     - name: Autobahn fuzzingserver (Linux only)
       if: matrix.os == 'ubuntu-latest' && matrix.asan
       run: |
@@ -168,7 +175,7 @@ jobs:
     - name: Stop background servers
       if: always()
       run: |
-        ${{ matrix.os == 'windows-latest' && 'Stop-Process -Name python -Force -ErrorAction SilentlyContinue; Get-Process toxiproxy* -ErrorAction SilentlyContinue | Stop-Process -Force' || 'pkill -f "echo_server\.py" 2>/dev/null || true; pkill -f toxiproxy-server 2>/dev/null || true' }}
+        ${{ matrix.os == 'windows-latest' && 'Stop-Process -Name python -Force -ErrorAction SilentlyContinue; Get-Process toxiproxy* -ErrorAction SilentlyContinue | Stop-Process -Force' || 'pkill -f "echo_server\.py" 2>/dev/null || true; pkill -f "listen_only_server\.py" 2>/dev/null || true; pkill -f toxiproxy-server 2>/dev/null || true' }}
 
     - name: Stop Autobahn
       if: matrix.os == 'ubuntu-latest' && matrix.asan && always()
