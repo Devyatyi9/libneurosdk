@@ -2,6 +2,8 @@
 
 C SDK for interacting with the Neuro API.
 
+[![Build and Test](https://github.com/Devyatyi9/libneurosdk/actions/workflows/test.yml/badge.svg)](https://github.com/Devyatyi9/libneurosdk/actions/workflows/test.yml)
+
 ## Documentation
 
 Please check the header file.
