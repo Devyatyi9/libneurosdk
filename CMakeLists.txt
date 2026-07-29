@@ -95,14 +95,15 @@ if(NEURO_BUILD_TESTS)
 	target_link_libraries(fuzzing_client PRIVATE ${PROJECT_NAME})
 endif()
 
-# Examples are not yet ported to the CMake build (pre-existing CRT linkage
-# issues with sprintf/_vscprintf/vsnprintf_s). Enable once fixed.
-# if(NEURO_BUILD_EXAMPLES)
-# 	add_executable(simple_example examples/simple.c)
-# 	target_link_libraries(simple_example PRIVATE ${PROJECT_NAME})
-# 	add_executable(tictactoe_example examples/tictactoe.c)
-# 	target_link_libraries(tictactoe_example PRIVATE ${PROJECT_NAME})
-# endif()
+if(NEURO_BUILD_EXAMPLES)
+	add_executable(simple_example examples/simple.c)
+	target_include_directories(simple_example PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+	target_link_libraries(simple_example PRIVATE ${PROJECT_NAME})
+
+	add_executable(tictactoe_example examples/tictactoe.c)
+	target_include_directories(tictactoe_example PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+	target_link_libraries(tictactoe_example PRIVATE ${PROJECT_NAME})
+endif()
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/neurosdk.pc
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig

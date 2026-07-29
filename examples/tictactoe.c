@@ -1,3 +1,6 @@
+#ifdef _MSC_VER
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +42,7 @@ bool board_full(char board[9]) {
 	return true;
 }
 
-int main() {
+int main(void) {
 	neurosdk_context_t ctx;
 	neurosdk_context_create_desc_t desc = {
 	    .url = NULL,

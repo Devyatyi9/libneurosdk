@@ -3,7 +3,14 @@
 #include <string.h>
 
 #ifdef _WIN32
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 5105)
+#endif
 #include <windows.h>
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 #define usleep(x) Sleep((x) / 1000)
 #else
 #include <unistd.h>
@@ -13,7 +20,7 @@
 
 #define GAME_NAME "TestGame"
 
-int main() {
+int main(void) {
 	neurosdk_context_t ctx;
 	neurosdk_context_create_desc_t desc = {
 	    .url = "ws://localhost:8000",
