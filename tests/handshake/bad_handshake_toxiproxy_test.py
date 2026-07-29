@@ -50,10 +50,17 @@ def main():
     results = {}
 
     try:
-        # Start Toxiproxy
-        toxiproxy_bin = os.environ.get("TOXIPROXY_BIN", "toxiproxy-server")
-        toxiproxy = subprocess.Popen([toxiproxy_bin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2)
+        # Start Toxiproxy (or use already running one)
+        toxiproxy = None
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{TOXIPROXY_PORT}/version", timeout=2)
+        except Exception:
+            toxiproxy_bin = os.environ.get("TOXIPROXY_BIN")
+            if not toxiproxy_bin:
+                import shutil
+                toxiproxy_bin = shutil.which("toxiproxy-server") or "toxiproxy-server"
+            toxiproxy = subprocess.Popen([toxiproxy_bin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
 
         for mode in MODES:
             print(f"--- [{mode}] ---")

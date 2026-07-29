@@ -172,7 +172,7 @@ jobs:
     - name: Stop background servers
       if: always()
       run: |
-        ${{ matrix.os == 'windows-latest' && 'Stop-Process -Name python -Force -ErrorAction SilentlyContinue; Get-Process toxiproxy* -ErrorAction SilentlyContinue | Stop-Process -Force' || 'pkill -f "echo_server\.py" 2>/dev/null; pkill -f toxiproxy-server 2>/dev/null; true' }}
+        ${{ matrix.os == 'windows-latest' && 'Stop-Process -Name python -Force -ErrorAction SilentlyContinue; Get-Process toxiproxy* -ErrorAction SilentlyContinue | Stop-Process -Force' || 'pkill -f "echo_server\.py" 2>/dev/null || true; pkill -f toxiproxy-server 2>/dev/null || true' }}
 
     - name: Stop Autobahn
       if: matrix.os == 'ubuntu-latest' && matrix.asan && always()

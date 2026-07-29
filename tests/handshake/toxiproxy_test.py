@@ -54,7 +54,25 @@ def toxiproxy_url(path):
     return f"http://127.0.0.1:{TOXIPROXY_PORT}{path}"
 
 def start_toxiproxy():
-    bin_path = os.environ.get("TOXIPROXY_BIN", "toxiproxy-server")
+    # Check if already running
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{TOXIPROXY_PORT}/version", timeout=2)
+        return None
+    except Exception:
+        pass
+
+    bin_path = os.environ.get("TOXIPROXY_BIN")
+    if not bin_path:
+        candidates = ["toxiproxy-server",
+                      "/tmp/toxiproxy-server",
+                      r"C:\ProgramData\toxiproxy\toxiproxy-server.exe"]
+        for c in candidates:
+            if os.path.isfile(c):
+                bin_path = c
+                break
+        if not bin_path:
+            import shutil
+            bin_path = shutil.which("toxiproxy-server") or "toxiproxy-server"
     proc = subprocess.Popen([bin_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
     return proc
@@ -222,8 +240,9 @@ def main():
             rc = run_pre_connect(toxic_name, echo_test_bin, proxy_port, up_port)
     finally:
         delete_proxy("ws_test")
-        toxiproxy.terminate()
-        toxiproxy.wait()
+        if toxiproxy:
+            toxiproxy.terminate()
+            toxiproxy.wait()
         echo.terminate()
         echo.wait()
 
