@@ -924,8 +924,13 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
             if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "invalid close frame", ws->callbacks.userdata);
             return WS_EVENT_ERROR;
           }
-          unsigned char close_payload[2] = {(unsigned char)(code >> 8), (unsigned char)(code)};
-          ws_send_control(ws, 0x88, close_payload, 2);
+          /* Respond with echo of the received close code, or empty if none */
+          if (payload_len >= 2) {
+            unsigned char close_payload[2] = {(unsigned char)(code >> 8), (unsigned char)(code)};
+            ws_send_control(ws, 0x88, close_payload, 2);
+          } else {
+            ws_send_control(ws, 0x88, NULL, 0);
+          }
           ws->state = WS_STATE_CLOSING;
           ws->closing_initiated = 0;
           if (ws->callbacks.on_close) ws->callbacks.on_close(ws, code, reason, reason_len, ws->callbacks.userdata);
