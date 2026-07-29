@@ -29,16 +29,20 @@ jobs:
 
     - name: Run integration tests
       run: |
-        python tests/echo_server.py 9002 &
+        ${{ matrix.os == 'windows-latest' && 'Start-Process -NoNewWindow python -ArgumentList "tests/integration/echo_server.py 9002"' || 'python tests/integration/echo_server.py 9002 &' }}
         sleep 3
         ${{ matrix.os == 'windows-latest' && 'build\Release\integration_test.exe' || './build/integration_test' }} ws://127.0.0.1:9002/
+
+    - name: Run echo_test
+      run: |
+        ${{ matrix.os == 'windows-latest' && 'build\Release\echo_test.exe' || './build/echo_test' }} ws://127.0.0.1:9002/
 
     - name: Autobahn fuzzingserver (Linux only)
       if: matrix.os == 'ubuntu-latest'
       run: |
         mkdir -p reports
         docker run -d -p 9001:9001 \
-          -v ${{ github.workspace }}/tests:/config \
+          -v ${{ github.workspace }}/tests/autobahn:/config \
           -v ${{ github.workspace }}/reports:/reports \
           --name autobahn \
           crossbario/autobahn-testsuite \
@@ -49,8 +53,12 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: |
         for i in $(seq 1 247); do
-          ./build/fuzzing_client "$i" "ws://127.0.0.1:9001"
+          if ! ./build/fuzzing_client "$i" "ws://127.0.0.1:9001"; then
+            echo "FAIL: case $i"
+            exit 1
+          fi
         done
+        echo "Autobahn: 247/247 passed"
 
     - name: Trigger report finalisation
       if: matrix.os == 'ubuntu-latest'
@@ -89,6 +97,76 @@ else:
 print('Autobahn: OK')
 "
 
+    - name: Install Toxiproxy (Linux only)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        wget -q https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/toxiproxy-server-linux-amd64 -O /usr/local/bin/toxiproxy-server
+        chmod +x /usr/local/bin/toxiproxy-server
+
+    - name: Run Toxiproxy × slicer (Linux only)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        python tests/handshake/toxiproxy_test.py slicer pre ./build/echo_test
+        python tests/handshake/toxiproxy_test.py latency pre ./build/echo_test
+        python tests/handshake/toxiproxy_test.py timeout pre ./build/echo_test
+        python tests/handshake/toxiproxy_test.py reset pre ./build/echo_test
+        python tests/handshake/toxiproxy_test.py bandwidth pre ./build/echo_test
+
+    - name: Run Toxiproxy × bad_handshake (Linux only)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        python tests/handshake/bad_handshake_toxiproxy_test.py ./build/echo_test
+
     - name: Stop Autobahn
       if: matrix.os == 'ubuntu-latest' && always()
       run: docker rm -f autobahn
+
+  asan:
+    name: ASan x86 (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure CMake
+      run: cmake -B build -A Win32 -DNEURO_BUILD_TESTS=ON -DNEURO_SANITIZE=ON
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Locate ASan DLL and add to PATH
+      shell: pwsh
+      run: |
+        $msvcRoot = "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC"
+        $dll = Get-ChildItem -Recurse -Filter "clang_rt.asan_dynamic-i386.dll" -Path $msvcRoot | Select-Object -First 1
+        if (-not $dll) {
+          $msvcRoot = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC"
+          $dll = Get-ChildItem -Recurse -Filter "clang_rt.asan_dynamic-i386.dll" -Path $msvcRoot | Select-Object -First 1
+        }
+        if ($dll) {
+          $dllDir = $dll.DirectoryName
+          echo "ASan DLL found: $dllDir"
+          echo "ASAN_DLL_DIR=$dllDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+        } else {
+          echo "ASan DLL not found"
+          exit 1
+        }
+
+    - name: Run integration tests
+      run: |
+        $env:PATH = "$env:ASAN_DLL_DIR;$env:PATH"
+        Start-Process -NoNewWindow python -ArgumentList "tests/integration/echo_server.py 9002"
+        Start-Sleep 3
+        build/Release/integration_test.exe ws://127.0.0.1:9002/
+
+    - name: Run echo_test
+      run: |
+        $env:PATH = "$env:ASAN_DLL_DIR;$env:PATH"
+        build/Release/echo_test.exe ws://127.0.0.1:9002/
+
+    - name: Long-run leak detection (5 min)
+      run: |
+        $env:PATH = "$env:ASAN_DLL_DIR;$env:PATH"
+        python tests/perf/long_run.py ws://127.0.0.1:9002/ 0.083 30
