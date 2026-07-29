@@ -62,40 +62,36 @@ jobs:
 
     - name: Trigger report finalisation
       if: matrix.os == 'ubuntu-latest'
+      shell: python
       run: |
-        python3 -c "
-import socket, base64, os
-s = socket.socket()
-s.settimeout(10)
-s.connect(('127.0.0.1', 9001))
-key = base64.b64encode(os.urandom(16)).decode()
-req = f'GET /updateReports?agent=ws_client HTTP/1.1\r\nHost: 127.0.0.1:9001\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n'
-s.send(req.encode())
-s.recv(4096)
-s.close()
-"
+        import socket, base64, os
+        s = socket.socket(); s.settimeout(10)
+        s.connect(('127.0.0.1', 9001))
+        k = base64.b64encode(os.urandom(16)).decode()
+        req = ('GET /updateReports?agent=ws_client HTTP/1.1\r\n'
+               'Host: 127.0.0.1:9001\r\n'
+               'Upgrade: websocket\r\nConnection: Upgrade\r\n'
+               'Sec-WebSocket-Key: ' + k + '\r\n'
+               'Sec-WebSocket-Version: 13\r\n\r\n')
+        s.send(req.encode()); s.recv(4096); s.close()
 
     - name: Check Autobahn reports (Linux only)
       if: matrix.os == 'ubuntu-latest'
+      shell: python
       run: |
-        python3 -c "
-import json, sys, os
-path = os.path.join('reports', 'index.json')
-if not os.path.exists(path):
-    print('index.json not found — reports not generated')
-    sys.exit(1)
-with open(path) as f:
-    data = json.load(f)
-agent = list(data.keys())[0]
-cases = data[agent]
-failed = [k for k,v in cases.items() if v.get('behavior') in ('FAILED','NON-COMPLIANT','UNSTABLE')]
-if failed:
-    print(f'{len(failed)} failures: {failed}')
-    sys.exit(1)
-else:
-    print(f'{len(cases)} cases, all passed')
-print('Autobahn: OK')
-"
+        import json, sys, os
+        p = os.path.join('reports', 'index.json')
+        if not os.path.exists(p):
+            print('index.json not found')
+            sys.exit(1)
+        d = json.load(open(p))
+        c = d[list(d.keys())[0]]
+        f = [k for k, v in c.items() if v.get('behavior') in ('FAILED', 'NON-COMPLIANT', 'UNSTABLE')]
+        if f:
+            print(f'{len(f)} failures: {f}')
+            sys.exit(1)
+        else:
+            print(f'{len(c)} cases, all passed')
 
     - name: Install Toxiproxy (Linux only)
       if: matrix.os == 'ubuntu-latest'
