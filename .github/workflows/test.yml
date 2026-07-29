@@ -36,14 +36,11 @@ jobs:
     - name: Build
       run: cmake --build build --config Release
 
-    - name: Run integration tests
+    - name: Run tests (integration + echo)
       run: |
         ${{ matrix.os == 'windows-latest' && 'Start-Process -NoNewWindow python -ArgumentList "tests/integration/echo_server.py 9002"' || 'python tests/integration/echo_server.py 9002 &' }}
         sleep 3
         ${{ matrix.os == 'windows-latest' && 'build\Release\integration_test.exe' || './build/integration_test' }} ws://127.0.0.1:9002/
-
-    - name: Run echo_test
-      run: |
         ${{ matrix.os == 'windows-latest' && 'build\Release\echo_test.exe' || './build/echo_test' }} ws://127.0.0.1:9002/
 
     - name: Autobahn fuzzingserver (Linux only)
@@ -159,11 +156,14 @@ jobs:
     - name: Locate ASan DLL and add to PATH
       shell: pwsh
       run: |
-        $pattern = "C:/Program Files/Microsoft Visual Studio/*/Enterprise/VC/Tools/MSVC/*/bin/Hostx64/x86/clang_rt.asan_dynamic-i386.dll"
+        $v = $env:VCToolsVersion
+        $pattern = "C:/Program Files/Microsoft Visual Studio/*/Enterprise/VC/Tools/MSVC/${v}/bin/Hostx64/x86/clang_rt.asan_dynamic-i386.dll"
         $dll = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $dll) {
-          $pattern = "C:/Program Files/Microsoft Visual Studio/*/Community/VC/Tools/MSVC/*/bin/Hostx64/x86/clang_rt.asan_dynamic-i386.dll"
-          $dll = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+          $dll = Get-ChildItem -Path "C:/Program Files/Microsoft Visual Studio/*/Enterprise/VC/Tools/MSVC/*/bin/Hostx64/x86/clang_rt.asan_dynamic-i386.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+        if (-not $dll) {
+          $dll = Get-ChildItem -Path "C:/Program Files/Microsoft Visual Studio/*/Community/VC/Tools/MSVC/*/bin/Hostx64/x86/clang_rt.asan_dynamic-i386.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
         }
         if ($dll) {
           $dllDir = $dll.DirectoryName
@@ -174,21 +174,13 @@ jobs:
           exit 1
         }
 
-    - name: Run integration tests
+    - name: Run tests (integration + echo + long-run)
       run: |
         $env:PATH = "$env:ASAN_DLL_DIR;$env:PATH"
         Start-Process -NoNewWindow python -ArgumentList "tests/integration/echo_server.py 9002"
         Start-Sleep 3
         build/Release/integration_test.exe ws://127.0.0.1:9002/
-
-    - name: Run echo_test
-      run: |
-        $env:PATH = "$env:ASAN_DLL_DIR;$env:PATH"
         build/Release/echo_test.exe ws://127.0.0.1:9002/
-
-    - name: Long-run leak detection (5 min)
-      run: |
-        $env:PATH = "$env:ASAN_DLL_DIR;$env:PATH"
         python tests/perf/long_run.py ws://127.0.0.1:9002/ 0.083 30
 
     - name: Stop background servers
