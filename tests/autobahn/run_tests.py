@@ -9,7 +9,7 @@ On Linux, starts Autobahn fuzzingserver via Docker automatically.
 On Windows/macOS, assumes the server is already running (user starts it manually).
 Default host=127.0.0.1 port=9001.
 """
-import subprocess, sys, time, os, socket, base64
+import subprocess, sys, time, os, socket, base64, glob
 
 AGENT = "ws_client"
 
@@ -53,6 +53,44 @@ if not BIN:
     BIN = os.path.join(HERE, "..", "..", "build", "fuzzing_client") if sys.platform != "win32" else os.path.join(HERE, "..", "..", "build", "Release", "fuzzing_client.exe")
     print(f"WARNING: binary not found, will try {BIN}")
 
+def _pe_arch(path):
+    """Detect PE machine type: 'x86' or 'x64', or None."""
+    try:
+        with open(path, 'rb') as f:
+            if f.read(2) != b'MZ':
+                return None
+            f.seek(0x3C)
+            pe_off = int.from_bytes(f.read(4), 'little')
+            f.seek(pe_off)
+            if f.read(4) != b'PE\0\0':
+                return None
+            machine = int.from_bytes(f.read(2), 'little')
+            if machine == 0x14C:
+                return 'x86'
+            if machine == 0x8664:
+                return 'x64'
+            return None
+    except Exception:
+        return None
+
+def build_env(bin_path):
+    """Add MSVC ASan DLL directory to PATH based on binary architecture."""
+    env = os.environ.copy()
+    msvc_root = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC"
+    versions = sorted(glob.glob(os.path.join(msvc_root, "*")), reverse=True)
+
+    arch = _pe_arch(bin_path) if os.path.isfile(bin_path) else None
+    subdirs = ['x64', 'x86'] if arch is None else [{'x86': 'x86', 'x64': 'x64'}[arch]]
+
+    for v in versions:
+        for sd in subdirs:
+            dll_dir = os.path.join(v, "bin", "Hostx64", sd)
+            asan_name = "clang_rt.asan_dynamic-x86_64.dll" if sd == 'x64' else "clang_rt.asan_dynamic-i386.dll"
+            if os.path.isfile(os.path.join(dll_dir, asan_name)):
+                env["PATH"] = dll_dir + os.pathsep + env["PATH"]
+                return env
+    return env
+
 TOTAL_CASES = 247
 
 # Start server on Linux (Docker available), skip on Win/macOS
@@ -83,7 +121,7 @@ if not os.path.exists(BIN):
 
 print(f"Running {TOTAL_CASES} test cases ...")
 for case in range(1, TOTAL_CASES + 1):
-    rc = subprocess.run([BIN, str(case), url]).returncode
+    rc = subprocess.run([BIN, str(case), url], env=build_env(BIN)).returncode
     if rc != 0:
         print(f"  case {case}: FAIL (exit {rc})")
     if case % 50 == 0:

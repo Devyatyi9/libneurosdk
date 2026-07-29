@@ -4,19 +4,29 @@
 Starts Toxiproxy, creates an upstream proxy, applies a toxic,
 then runs echo_test against the proxy endpoint.
 
+Toxiproxy bandwidth rate is in KB/s (e.g. rate=1 = 1 KB/s = 1024 B/s).
+
 Usage:
-    python toxiproxy_test.py <toxic> [test_path] [port]
+    python toxiproxy_test.py <toxic> [mode] [test_path] [port]
+
+Modes:
+    pre    Apply toxic BEFORE client connects (default).
+           Uses native echo_test binary (recommended for bandwidth).
+    mid    Apply toxic mid-connection after handshake.
+           Uses Python websockets library.
+           NOTE: bandwidth in mid mode shows no effect due to
+           websockets internal buffering. Use pre + echo_test instead.
 
 Toxics:
     slicer     - slice TCP stream into 1-byte chunks
     latency    - add 5s latency with 1s jitter
     timeout    - close connection after 500ms
     reset      - TCP RST instead of FIN
-    bandwidth  - limit to 1 KB/s
+    bandwidth  - limit to N KB/s (default 10)
 
 Requires toxiproxy-server in PATH or TOXIPROXY_BIN env var.
 """
-import json, os, socket, subprocess, sys, time, urllib.request
+import argparse, asyncio, glob, json, os, subprocess, sys, time, urllib.request
 
 TOXIPROXY_PORT = 8474
 UPSTREAM_PORT = 19001
@@ -27,11 +37,48 @@ TOXICS = {
     "latency": {"type": "latency", "attributes": {"latency": 5000, "jitter": 1000}},
     "timeout": {"type": "timeout", "attributes": {"timeout": 500}},
     "reset":   {"type": "reset_peer", "attributes": {}},
-    "bandwidth": {"type": "bandwidth", "attributes": {"rate": 1024}},
+    "bandwidth": {"type": "bandwidth", "attributes": {"rate": 10}},  # 10 KB/s
 }
 
+def _pe_arch(path):
+    """Detect PE machine type: 'x86' or 'x64', or None."""
+    try:
+        with open(path, 'rb') as f:
+            if f.read(2) != b'MZ':
+                return None
+            f.seek(0x3C)
+            pe_off = int.from_bytes(f.read(4), 'little')
+            f.seek(pe_off)
+            if f.read(4) != b'PE\0\0':
+                return None
+            machine = int.from_bytes(f.read(2), 'little')
+            if machine == 0x14C:
+                return 'x86'
+            if machine == 0x8664:
+                return 'x64'
+            return None
+    except Exception:
+        return None
+
+def build_env(bin_path):
+    """Add MSVC ASan DLL directory to PATH based on binary architecture."""
+    env = os.environ.copy()
+    msvc_root = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC"
+    versions = sorted(glob.glob(os.path.join(msvc_root, "*")), reverse=True)
+
+    arch = _pe_arch(bin_path) if os.path.isfile(bin_path) else None
+    subdirs = ['x64', 'x86'] if arch is None else [{'x86': 'x86', 'x64': 'x64'}[arch]]
+
+    for v in versions:
+        for sd in subdirs:
+            dll_dir = os.path.join(v, "bin", "Hostx64", sd)
+            asan_name = "clang_rt.asan_dynamic-x86_64.dll" if sd == 'x64' else "clang_rt.asan_dynamic-i386.dll"
+            if os.path.isfile(os.path.join(dll_dir, asan_name)):
+                env["PATH"] = dll_dir + os.pathsep + env["PATH"]
+                return env
+    return env
+
 def find_echo_server():
-    """Find echo_server.py in tests/integration/."""
     d = os.path.dirname(os.path.abspath(__file__))
     p = os.path.join(d, "..", "integration", "echo_server.py")
     if not os.path.exists(p):
@@ -39,9 +86,13 @@ def find_echo_server():
     return p
 
 def find_echo_test():
-    """Find echo_test binary."""
     root = os.path.join(os.path.dirname(__file__), "..", "..")
     candidates = [
+        os.path.join(root, "build-x86", "Release", "echo_test.exe"),
+        os.path.join(root, "build-x64", "Release", "echo_test.exe"),
+        os.path.join(root, "build-asan-x86", "Release", "echo_test.exe"),
+        os.path.join(root, "build-asan-x64", "Release", "echo_test.exe"),
+        os.path.join(root, "build-asan", "Release", "echo_test.exe"),
         os.path.join(root, "build", "Release", "echo_test.exe"),
         os.path.join(root, "build", "echo_test"),
         os.path.join(root, "build-release", "Release", "echo_test.exe"),
@@ -51,7 +102,6 @@ def find_echo_test():
         p = os.path.abspath(c)
         if os.path.exists(p):
             return p
-    # Maybe just "echo_test" in PATH
     return "echo_test"
 
 def toxiproxy_url(path):
@@ -60,7 +110,7 @@ def toxiproxy_url(path):
 def start_toxiproxy():
     bin_path = os.environ.get("TOXIPROXY_BIN", "toxiproxy-server")
     proc = subprocess.Popen([bin_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)  # wait for startup
+    time.sleep(2)
     return proc
 
 def create_proxy(name, listen, upstream):
@@ -68,10 +118,17 @@ def create_proxy(name, listen, upstream):
     req = urllib.request.Request(toxiproxy_url("/proxies"), data, {"Content-Type": "application/json"})
     urllib.request.urlopen(req)
 
-def add_toxic(proxy_name, toxic):
-    data = json.dumps(toxic).encode()
-    req = urllib.request.Request(f"{toxiproxy_url('/proxies')}/{proxy_name}/toxics", data, {"Content-Type": "application/json"}, method="POST")
+def add_toxic(proxy_name, toxic, stream=None):
+    data = dict(toxic)
+    if stream:
+        data["stream"] = stream
+    body = json.dumps(data).encode()
+    req = urllib.request.Request(f"{toxiproxy_url('/proxies')}/{proxy_name}/toxics", body, {"Content-Type": "application/json"}, method="POST")
     urllib.request.urlopen(req)
+
+def add_bandwidth(proxy_name, rate):
+    for s in ("upstream", "downstream"):
+        add_toxic(proxy_name, {"type": "bandwidth", "attributes": {"rate": rate}}, stream=s)
 
 def delete_proxy(name):
     req = urllib.request.Request(f"{toxiproxy_url('/proxies')}/{name}", method="DELETE")
@@ -80,47 +137,140 @@ def delete_proxy(name):
     except:
         pass
 
+def apply_toxic(name, toxic_name):
+    if toxic_name == "bandwidth":
+        rate = TOXICS["bandwidth"]["attributes"]["rate"]
+        add_bandwidth(name, rate)
+    else:
+        add_toxic(name, TOXICS[toxic_name])
+
+def run_pre_connect(toxic_name, echo_test_bin, proxy_port, up_port):
+    delete_proxy("ws_test")
+    create_proxy("ws_test", proxy_port, up_port)
+    apply_toxic("ws_test", toxic_name)
+    print(f"Toxiproxy: {toxic_name} on port {proxy_port} -> {up_port} (pre-connect)")
+
+    url = f"ws://127.0.0.1:{proxy_port}/"
+    print(f"Running: {echo_test_bin} {url}")
+    rc = subprocess.call([echo_test_bin, url], env=build_env(echo_test_bin))
+    print(f"echo_test exit code: {rc}")
+    return rc
+
+
+async def run_mid_connection(toxic_name, proxy_port, up_port):
+    import websockets
+
+    delete_proxy("ws_test")
+    create_proxy("ws_test", proxy_port, up_port)
+    print(f"Toxiproxy: proxy on {proxy_port} -> {up_port}, no toxic yet")
+    print("Connecting websockets client...")
+
+    rc = 0
+    async with websockets.connect(f"ws://127.0.0.1:{proxy_port}/") as ws:
+        print("[open] Connection established (websockets)")
+
+        if toxic_name == "bandwidth":
+            add_bandwidth("ws_test", TOXICS["bandwidth"]["attributes"]["rate"])
+        else:
+            add_toxic("ws_test", TOXICS[toxic_name])
+        print(f"Toxiproxy: applied '{toxic_name}' mid-connection")
+
+        if toxic_name == "bandwidth":
+            rate = TOXICS["bandwidth"]["attributes"]["rate"]
+            for size in (1024, 65536, 262144, 1048576):
+                payload = b"x" * size
+                t0 = time.monotonic()
+                await ws.send(payload)
+                echo = await asyncio.wait_for(ws.recv(), timeout=30)
+                elapsed = time.monotonic() - t0
+                ok = echo == payload
+                actual = f"{size/elapsed:.0f} B/s" if elapsed > 0.001 else "instant"
+                print(f"  {size:>7} bytes: {elapsed:.3f}s ({actual}, limit {rate} B/s)")
+                if not ok:
+                    rc = 1
+        elif toxic_name == "slicer":
+            for payload in (b"Hello, World!", b"x" * 1000, b"A" * 65536):
+                await ws.send(payload)
+                echo = await asyncio.wait_for(ws.recv(), timeout=10)
+                ok = echo == payload
+                print(f"  {len(payload):>7} bytes: {'OK' if ok else 'MISMATCH'}")
+                if not ok:
+                    rc = 1
+        elif toxic_name == "latency":
+            t0 = time.monotonic()
+            await ws.send(b"ping")
+            echo = await asyncio.wait_for(ws.recv(), timeout=15)
+            elapsed = time.monotonic() - t0
+            ok = echo == b"ping"
+            print(f"  ping-pong: {elapsed:.2f}s (latency 5s expected) {'OK' if ok else 'MISMATCH'}")
+            if not ok:
+                rc = 1
+        elif toxic_name in ("timeout", "reset"):
+            try:
+                await ws.send(b"will this get through?")
+                await asyncio.wait_for(ws.recv(), timeout=5)
+                print("  unexpected: message received after timeout/reset")
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            await asyncio.sleep(1)
+            if ws.state == websockets.State.OPEN:
+                print(f"  unexpected: connection still open after {toxic_name}")
+            else:
+                print(f"  connection closed as expected ({toxic_name})")
+        else:
+            await ws.send(b"Hello from mid-connection!")
+            echo = await asyncio.wait_for(ws.recv(), timeout=10)
+            ok = echo == b"Hello from mid-connection!"
+            print(f"  echo: {'OK' if ok else 'MISMATCH'}")
+            if not ok:
+                rc = 1
+
+        await ws.close()
+
+    print(f"mid-connection test exit code: {rc}")
+    return rc
+
+
 def main():
-    toxic_name = sys.argv[1] if len(sys.argv) > 1 else "slicer"
-    test_path = sys.argv[2] if len(sys.argv) > 2 else find_echo_test()
-    up_port = int(sys.argv[3]) if len(sys.argv) > 3 else UPSTREAM_PORT
+    parser = argparse.ArgumentParser(description="Toxiproxy WS test harness")
+    parser.add_argument("toxic", nargs="?", default="slicer", choices=list(TOXICS.keys()),
+                        help="toxic to apply")
+    parser.add_argument("mode", nargs="?", default="pre", choices=("pre", "mid"),
+                        help="pre=apply before connect, mid=apply mid-connection")
+    parser.add_argument("test_path", nargs="?", default=None,
+                        help="path to echo_test binary (pre mode only)")
+    parser.add_argument("port", nargs="?", type=int, default=UPSTREAM_PORT,
+                        help="upstream port")
+    args = parser.parse_args()
+
+    toxic_name = args.toxic
+    up_port = args.port
     proxy_port = PROXY_PORT
+    use_mid = args.mode == "mid"
 
-    if toxic_name not in TOXICS:
-        print(f"Unknown toxic: {toxic_name}. Available: {', '.join(TOXICS.keys())}")
-        sys.exit(1)
-
-    echo_script = find_echo_server()
-    echo_test_bin = test_path if os.path.exists(test_path) else find_echo_test()
-
-    # Start echo server as upstream
-    echo = subprocess.Popen([sys.executable, echo_script, str(up_port)],
+    # Start echo server
+    echo = subprocess.Popen([sys.executable, find_echo_server(), str(up_port)],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
 
     # Start Toxiproxy
     toxiproxy = start_toxiproxy()
 
+    rc = 0
     try:
-        # Create proxy
-        delete_proxy("ws_test")
-        create_proxy("ws_test", proxy_port, up_port)
-        # Add toxic
-        add_toxic("ws_test", TOXICS[toxic_name])
-        print(f"Toxiproxy: {toxic_name} on port {proxy_port} → {up_port}")
-
-        # Run echo_test
-        url = f"ws://127.0.0.1:{proxy_port}/"
-        print(f"Running: {echo_test_bin} {url}")
-        rc = subprocess.call([echo_test_bin, url])
-        print(f"echo_test exit code: {rc}")
-        sys.exit(rc)
+        if use_mid:
+            rc = asyncio.run(run_mid_connection(toxic_name, proxy_port, up_port))
+        else:
+            echo_test_bin = args.test_path if args.test_path and os.path.exists(args.test_path) else find_echo_test()
+            rc = run_pre_connect(toxic_name, echo_test_bin, proxy_port, up_port)
     finally:
         delete_proxy("ws_test")
         toxiproxy.terminate()
         toxiproxy.wait()
         echo.terminate()
         echo.wait()
+
+    sys.exit(rc)
 
 if __name__ == '__main__':
     main()

@@ -748,10 +748,6 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 
         char req[1024];
         int reqlen = build_upgrade_request(req, sizeof(req), ws->host, ws->port, ws->path, key);
-        /* snprintf returns the length that WOULD have been written; if
-         * it's >= sizeof(req) the request was truncated and reqlen no
-         * longer describes real bytes in req -- sending it as-is would
-         * read past the buffer. Treat that as a hard error instead. */
         if (reqlen <= 0 || (size_t)reqlen >= sizeof(req)) {
           ws->state = WS_STATE_ERROR;
           if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "upgrade request too large for buffer", ws->callbacks.userdata);
@@ -765,64 +761,94 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
           return WS_EVENT_ERROR;
         }
         ws->upgrade_done = 1;
-        return WS_EVENT_NONE; /* wait for response */
+        /* Fall through into the response-waiting loop below so one
+         * ws_poll() call can complete the entire handshake when the
+         * server responds quickly — the caller doesn't need another
+         * round trip through the event loop. */
       }
 
-      if (ws->recv_len >= WS_RECV_BUF_SIZE) {
-        /* Headers alone filled the whole buffer without a "\r\n\r\n" in
-         * sight -- something is very wrong upstream. */
-        ws->state = WS_STATE_ERROR;
-        if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "upgrade response too large for buffer", ws->callbacks.userdata);
-        return WS_EVENT_ERROR;
-      }
+      /* Internal loop: the upgrade response MUST arrive before we
+       * transition to OPEN.  There is nothing useful the caller can
+       * do between partial reads of the 101 response, so we keep
+       * driving select/recv/parse here until we either succeed, fail,
+       * or exhaust the timeout budget.
+       *
+       * This is critical with Toxiproxy's `slicer` toxic, which
+       * breaks the TCP stream into 1-byte chunks — without the
+       * internal loop each byte would cost one full ws_poll()
+       * round-trip and the caller's iteration budget (echo_test:
+       * 100 polls × 100ms = 10s) would be exhausted long before
+       * the ~200-byte response is fully assembled. */
+      int elapsed_ms = 0;
+      int poll_interval = 10;  /* small steps so the overall budget
+                                * is a good approximation of real time
+                                * rather than pure iteration count */
+      for (;;) {
+        if (ws->recv_len >= WS_RECV_BUF_SIZE) {
+          ws->state = WS_STATE_ERROR;
+          if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "upgrade response too large for buffer", ws->callbacks.userdata);
+          return WS_EVENT_ERROR;
+        }
 
-      /* Wait for data to become readable before recv — on Windows,
-       * recv on a non-blocking socket returns WSAEWOULDBLOCK even if
-       * data is in flight but hasn't landed yet.  Using select for
-       * readability avoids busy-spinning through poll iterations. */
-      {
+        /* Wait for readability (or timeout) */
         fd_set rfds; FD_ZERO(&rfds); FD_SET(ws->fd, &rfds);
-        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
-        int sel = select((int)(ws->fd + 1), &rfds, NULL, NULL, timeout_ms < 0 ? NULL : &tv);
-        if (sel <= 0) return sel == 0 ? WS_EVENT_NONE : WS_EVENT_ERROR;
-      }
+        int wait_ms = (timeout_ms < 0) ? poll_interval
+                     : (timeout_ms - elapsed_ms < poll_interval) ? timeout_ms - elapsed_ms
+                     : poll_interval;
+        if (wait_ms <= 0) return WS_EVENT_NONE;  /* caller's timeout exhausted */
 
-      int n = sock_recv(ws->fd, ws->recv_buf + ws->recv_len,
-                        WS_RECV_BUF_SIZE - ws->recv_len);
-      if (n < 0) {
-        if (sock_would_block()) return WS_EVENT_NONE;
-        ws->state = WS_STATE_ERROR;
-        if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "recv failed during upgrade", ws->callbacks.userdata);
-        return WS_EVENT_ERROR;
-      }
-      if (n == 0) {
-        ws->state = WS_STATE_CLOSED;
-        if (ws->callbacks.on_close) ws->callbacks.on_close(ws, 1006, "", 0, ws->callbacks.userdata);
-        return WS_EVENT_CLOSE;
-      }
-      ws->recv_len += (size_t)n;
+        struct timeval tv = {wait_ms / 1000, (wait_ms % 1000) * 1000};
+        int sel = select((int)(ws->fd + 1), &rfds, NULL, NULL, &tv);
+        if (sel < 0) {
+          ws->state = WS_STATE_ERROR;
+          if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "select failed during upgrade", ws->callbacks.userdata);
+          return WS_EVENT_ERROR;
+        }
 
-      size_t header_len = 0;
-      int up = parse_upgrade_response(ws->recv_buf, ws->recv_len, &header_len, ws->key);
-      if (up < 0) {
-        ws->state = WS_STATE_ERROR;
-        if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "bad HTTP response during upgrade", ws->callbacks.userdata);
-        return WS_EVENT_ERROR;
-      }
-      if (up == 0) return WS_EVENT_NONE; /* wait for more data */
+        if (timeout_ms >= 0) elapsed_ms += wait_ms;
 
-      /* Upgrade done! Keep anything received past the header block --
-       * a server that writes its first WS frame right after the 101
-       * response can land it in the same recv(). */
-      ws->state = WS_STATE_OPEN;
-      if (header_len < ws->recv_len) {
-        memmove(ws->recv_buf, ws->recv_buf + header_len, ws->recv_len - header_len);
-        ws->recv_len -= header_len;
-      } else {
-        ws->recv_len = 0;
+        if (sel == 0) continue;  /* no data yet, loop again */
+
+        /* Drain whatever is readable (may be multiple TCP segments
+         * from slicer) */
+        while (ws->recv_len < WS_RECV_BUF_SIZE) {
+          int n = sock_recv(ws->fd, ws->recv_buf + ws->recv_len,
+                            WS_RECV_BUF_SIZE - ws->recv_len);
+          if (n < 0) {
+            if (sock_would_block()) break;
+            ws->state = WS_STATE_ERROR;
+            if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "recv failed during upgrade", ws->callbacks.userdata);
+            return WS_EVENT_ERROR;
+          }
+          if (n == 0) {
+            ws->state = WS_STATE_CLOSED;
+            if (ws->callbacks.on_close) ws->callbacks.on_close(ws, 1006, "", 0, ws->callbacks.userdata);
+            return WS_EVENT_CLOSE;
+          }
+          ws->recv_len += (size_t)n;
+        }
+
+        /* See if we have a complete 101 response now */
+        size_t header_len = 0;
+        int up = parse_upgrade_response(ws->recv_buf, ws->recv_len, &header_len, ws->key);
+        if (up < 0) {
+          ws->state = WS_STATE_ERROR;
+          if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "bad HTTP response during upgrade", ws->callbacks.userdata);
+          return WS_EVENT_ERROR;
+        }
+        if (up == 1) {
+          ws->state = WS_STATE_OPEN;
+          if (header_len < ws->recv_len) {
+            memmove(ws->recv_buf, ws->recv_buf + header_len, ws->recv_len - header_len);
+            ws->recv_len -= header_len;
+          } else {
+            ws->recv_len = 0;
+          }
+          if (ws->callbacks.on_open) ws->callbacks.on_open(ws, ws->callbacks.userdata);
+          return WS_EVENT_OPEN;
+        }
+        /* up == 0: need more data, loop back to select() */
       }
-      if (ws->callbacks.on_open) ws->callbacks.on_open(ws, ws->callbacks.userdata);
-      return WS_EVENT_OPEN;
     }
 
     /* ---- OPEN: normal data exchange ---- */
@@ -839,34 +865,33 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
         return WS_EVENT_ERROR;
       }
 
-      /* Wait for readability before recv (critical on Windows where
-       * non-blocking recv returns WSAEWOULDBLOCK; harmless on POSIX). */
-      {
-        fd_set rfds; FD_ZERO(&rfds); FD_SET(ws->fd, &rfds);
-        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
-        int sel = select((int)(ws->fd + 1), &rfds, NULL, NULL, timeout_ms < 0 ? NULL : &tv);
-        if (sel < 0) {
-          ws->state = WS_STATE_ERROR;
-          if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "select failed before recv", ws->callbacks.userdata);
-          return WS_EVENT_ERROR;
+      int need_select = 1;
+      while (ws->recv_len < WS_RECV_BUF_SIZE) {
+        if (need_select) {
+          fd_set rfds; FD_ZERO(&rfds); FD_SET(ws->fd, &rfds);
+          struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+          int sel = select((int)(ws->fd + 1), &rfds, NULL, NULL, timeout_ms < 0 ? NULL : &tv);
+          if (sel < 0) {
+            ws->state = WS_STATE_ERROR;
+            if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "select failed before recv", ws->callbacks.userdata);
+            return WS_EVENT_ERROR;
+          }
+          if (sel == 0) break; /* timeout -- parse whatever is buffered */
+          need_select = 0;     /* one select is enough; loop recv after it */
         }
-        /* sel==0 (timeout): still parse leftover buffered data below */
-      }
-
-      int n = sock_recv(ws->fd, ws->recv_buf + ws->recv_len,
-                        WS_RECV_BUF_SIZE - ws->recv_len);
-      if (n < 0) {
-        if (!sock_would_block()) {
+        int n = sock_recv(ws->fd, ws->recv_buf + ws->recv_len,
+                          WS_RECV_BUF_SIZE - ws->recv_len);
+        if (n < 0) {
+          if (sock_would_block()) break;
           ws->state = WS_STATE_ERROR;
           if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "recv failed", ws->callbacks.userdata);
           return WS_EVENT_ERROR;
         }
-        n = 0; /* no new data this round -- still parse whatever's already buffered below */
-      } else if (n == 0) {
-        ws->state = WS_STATE_CLOSED;
-        if (ws->callbacks.on_close) ws->callbacks.on_close(ws, 1006, "", 0, ws->callbacks.userdata);
-        return WS_EVENT_CLOSE;
-      } else {
+        if (n == 0) {
+          ws->state = WS_STATE_CLOSED;
+          if (ws->callbacks.on_close) ws->callbacks.on_close(ws, 1006, "", 0, ws->callbacks.userdata);
+          return WS_EVENT_CLOSE;
+        }
         ws->recv_len += (size_t)n;
       }
 
