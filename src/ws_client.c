@@ -770,6 +770,17 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
         return WS_EVENT_ERROR;
       }
 
+      /* Wait for data to become readable before recv — on Windows,
+       * recv on a non-blocking socket returns WSAEWOULDBLOCK even if
+       * data is in flight but hasn't landed yet.  Using select for
+       * readability avoids busy-spinning through poll iterations. */
+      {
+        fd_set rfds; FD_ZERO(&rfds); FD_SET(ws->fd, &rfds);
+        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+        int sel = select((int)(ws->fd + 1), &rfds, NULL, NULL, timeout_ms < 0 ? NULL : &tv);
+        if (sel <= 0) return sel == 0 ? WS_EVENT_NONE : WS_EVENT_ERROR;
+      }
+
       int n = sock_recv(ws->fd, ws->recv_buf + ws->recv_len,
                         WS_RECV_BUF_SIZE - ws->recv_len);
       if (n < 0) {
@@ -820,6 +831,20 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
         ws->state = WS_STATE_ERROR;
         if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "message exceeds receive buffer size", ws->callbacks.userdata);
         return WS_EVENT_ERROR;
+      }
+
+      /* Wait for readability before recv (critical on Windows where
+       * non-blocking recv returns WSAEWOULDBLOCK; harmless on POSIX). */
+      {
+        fd_set rfds; FD_ZERO(&rfds); FD_SET(ws->fd, &rfds);
+        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+        int sel = select((int)(ws->fd + 1), &rfds, NULL, NULL, timeout_ms < 0 ? NULL : &tv);
+        if (sel < 0) {
+          ws->state = WS_STATE_ERROR;
+          if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "select failed before recv", ws->callbacks.userdata);
+          return WS_EVENT_ERROR;
+        }
+        /* sel==0 (timeout): still parse leftover buffered data below */
       }
 
       int n = sock_recv(ws->fd, ws->recv_buf + ws->recv_len,
