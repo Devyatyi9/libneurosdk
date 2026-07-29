@@ -127,7 +127,7 @@ jobs:
     - name: Stop background servers
       if: always()
       run: |
-        ${{ matrix.os == 'windows-latest' && 'Stop-Process -Name python -Force -ErrorAction SilentlyContinue' || 'pkill -f echo_server.py 2>/dev/null; pkill -f toxiproxy-server 2>/dev/null; true' }}
+        ${{ matrix.os == 'windows-latest' && 'Stop-Process -Name python -Force -ErrorAction SilentlyContinue' || 'pkill -f echo_server.py 2>/dev/null || true; pkill -f toxiproxy-server 2>/dev/null || true' }}
 
     - name: Stop Autobahn
       if: matrix.os == 'ubuntu-latest' && always()
@@ -159,17 +159,11 @@ jobs:
     - name: Locate ASan DLL and add to PATH
       shell: pwsh
       run: |
-        $paths = @(
-          "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC",
-          "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC",
-          "C:/Program Files/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC"
-        )
-        $dll = $null
-        foreach ($p in $paths) {
-          if (Test-Path $p) {
-            $dll = Get-ChildItem -Recurse -Filter "clang_rt.asan_dynamic-i386.dll" -Path $p -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($dll) { break }
-          }
+        $pattern = "C:/Program Files/Microsoft Visual Studio/*/Enterprise/VC/Tools/MSVC/*/bin/Hostx64/x86/clang_rt.asan_dynamic-i386.dll"
+        $dll = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $dll) {
+          $pattern = "C:/Program Files/Microsoft Visual Studio/*/Community/VC/Tools/MSVC/*/bin/Hostx64/x86/clang_rt.asan_dynamic-i386.dll"
+          $dll = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
         }
         if ($dll) {
           $dllDir = $dll.DirectoryName
