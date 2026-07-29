@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef _WIN32
 #pragma warning(push)
@@ -26,7 +27,7 @@ static void on_open(ws_t *ws, void *userdata) {
 }
 
 static void on_message(ws_t *ws, const char *data, size_t len, int binary, void *userdata) {
-  (void)ws; (void)userdata; (void)data; (void)binary;
+  (void)ws; (void)userdata; (void)data; (void)len; (void)binary;
   received++;
 }
 
@@ -64,7 +65,9 @@ int main(int argc, char *argv[]) {
   if (got_error) { ws_destroy(ws); return 1; }
 
   time_t end = time(NULL) + (time_t)duration_h * 3600;
+  time_t last_progress = 0;
   printf("[info] Connected. Sending every %dms for %dh\n", interval_ms, duration_h);
+  printf("[info] Progress: ");
 
   while (time(NULL) < end && !got_error) {
     const char *msg = "ping";
@@ -91,7 +94,17 @@ int main(int argc, char *argv[]) {
       for (int i = 0; i < remaining / step && !got_error; i++)
         ws_poll(ws, step);
     }
+
+    time_t now = time(NULL);
+    if (now - last_progress >= 60) {  /* every minute */
+      int left_h = (int)((end - now) / 3600);
+      int left_m = (int)((end - now) % 3600 / 60);
+      printf("\r[info] %dh %dm left, sent=%lu recv=%lu    ", left_h, left_m, sent, received);
+      fflush(stdout);
+      last_progress = now;
+    }
   }
+  printf("\r[info] Done.                          \n");
 
   printf("[info] Closing (sent=%lu recv=%lu errors=%d)\n", sent, received, got_error);
   ws_close(ws);

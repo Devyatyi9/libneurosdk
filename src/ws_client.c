@@ -123,6 +123,12 @@ static void sock_cleanup(void) {}
 static SOCKET sock_create(void) {
   SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
   if (s == INVALID_SOCKET) return INVALID_SOCKET;
+  /* Allow reusing local ports still in TIME_WAIT — critical on Windows
+   * when many connect/close cycles exhaust the ephemeral port range.
+   * Without this, after ~400 rapid iterations connect() never completes
+   * and the loop hangs until the internal timeout fires (10s). */
+  int reuse = 1;
+  setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
   return s;
 }
 

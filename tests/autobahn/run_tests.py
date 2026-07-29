@@ -44,7 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Find fuzzing_client binary in common build directories
 BIN = None
-for d in ["build", "build-asan", "build-release"]:
+for d in ["build-x86", "build-x64", "build-asan-x86", "build-asan-x64", "build", "build-asan", "build-release"]:
     exe = os.path.join(HERE, "..", "..", d, "Release", "fuzzing_client.exe") if sys.platform == "win32" else os.path.join(HERE, "..", "..", d, "fuzzing_client")
     if os.path.exists(exe):
         BIN = exe
