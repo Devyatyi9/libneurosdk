@@ -26,7 +26,10 @@ Toxics:
 
 Requires toxiproxy-server in PATH or TOXIPROXY_BIN env var.
 """
-import argparse, asyncio, glob, json, os, subprocess, sys, time, urllib.request
+import argparse, asyncio, json, os, subprocess, sys, time, urllib.request
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from test_utils import build_env, find_echo_test
 
 TOXIPROXY_PORT = 8474
 UPSTREAM_PORT = 19001
@@ -40,69 +43,12 @@ TOXICS = {
     "bandwidth": {"type": "bandwidth", "attributes": {"rate": 10}},  # 10 KB/s
 }
 
-def _pe_arch(path):
-    """Detect PE machine type: 'x86' or 'x64', or None."""
-    try:
-        with open(path, 'rb') as f:
-            if f.read(2) != b'MZ':
-                return None
-            f.seek(0x3C)
-            pe_off = int.from_bytes(f.read(4), 'little')
-            f.seek(pe_off)
-            if f.read(4) != b'PE\0\0':
-                return None
-            machine = int.from_bytes(f.read(2), 'little')
-            if machine == 0x14C:
-                return 'x86'
-            if machine == 0x8664:
-                return 'x64'
-            return None
-    except Exception:
-        return None
-
-def build_env(bin_path):
-    """Add MSVC ASan DLL directory to PATH based on binary architecture."""
-    env = os.environ.copy()
-    msvc_root = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC"
-    versions = sorted(glob.glob(os.path.join(msvc_root, "*")), reverse=True)
-
-    arch = _pe_arch(bin_path) if os.path.isfile(bin_path) else None
-    subdirs = ['x64', 'x86'] if arch is None else [{'x86': 'x86', 'x64': 'x64'}[arch]]
-
-    for v in versions:
-        for sd in subdirs:
-            dll_dir = os.path.join(v, "bin", "Hostx64", sd)
-            asan_name = "clang_rt.asan_dynamic-x86_64.dll" if sd == 'x64' else "clang_rt.asan_dynamic-i386.dll"
-            if os.path.isfile(os.path.join(dll_dir, asan_name)):
-                env["PATH"] = dll_dir + os.pathsep + env["PATH"]
-                return env
-    return env
-
 def find_echo_server():
     d = os.path.dirname(os.path.abspath(__file__))
     p = os.path.join(d, "..", "integration", "echo_server.py")
     if not os.path.exists(p):
         raise RuntimeError(f"echo_server.py not found at {p}")
     return p
-
-def find_echo_test():
-    root = os.path.join(os.path.dirname(__file__), "..", "..")
-    candidates = [
-        os.path.join(root, "build-x86", "Release", "echo_test.exe"),
-        os.path.join(root, "build-x64", "Release", "echo_test.exe"),
-        os.path.join(root, "build-asan-x86", "Release", "echo_test.exe"),
-        os.path.join(root, "build-asan-x64", "Release", "echo_test.exe"),
-        os.path.join(root, "build-asan", "Release", "echo_test.exe"),
-        os.path.join(root, "build", "Release", "echo_test.exe"),
-        os.path.join(root, "build", "echo_test"),
-        os.path.join(root, "build-release", "Release", "echo_test.exe"),
-        os.path.join(root, "build-release", "echo_test"),
-    ]
-    for c in candidates:
-        p = os.path.abspath(c)
-        if os.path.exists(p):
-            return p
-    return "echo_test"
 
 def toxiproxy_url(path):
     return f"http://127.0.0.1:{TOXIPROXY_PORT}{path}"
@@ -126,6 +72,11 @@ def add_toxic(proxy_name, toxic, stream=None):
     req = urllib.request.Request(f"{toxiproxy_url('/proxies')}/{proxy_name}/toxics", body, {"Content-Type": "application/json"}, method="POST")
     urllib.request.urlopen(req)
 
+def add_toxic_both(proxy_name, toxic):
+    """Apply toxic to both upstream and downstream directions."""
+    for s in ("upstream", "downstream"):
+        add_toxic(proxy_name, toxic, stream=s)
+
 def add_bandwidth(proxy_name, rate):
     for s in ("upstream", "downstream"):
         add_toxic(proxy_name, {"type": "bandwidth", "attributes": {"rate": rate}}, stream=s)
@@ -142,7 +93,7 @@ def apply_toxic(name, toxic_name):
         rate = TOXICS["bandwidth"]["attributes"]["rate"]
         add_bandwidth(name, rate)
     else:
-        add_toxic(name, TOXICS[toxic_name])
+        add_toxic_both(name, TOXICS[toxic_name])
 
 def run_pre_connect(toxic_name, echo_test_bin, proxy_port, up_port):
     delete_proxy("ws_test")
@@ -182,13 +133,16 @@ async def run_mid_connection(toxic_name, proxy_port, up_port):
             rate = TOXICS["bandwidth"]["attributes"]["rate"]
             for size in (1024, 65536, 262144, 1048576):
                 payload = b"x" * size
+                # dynamic timeout: round-trip at rate * 2.5 safety margin + 10s base
+                expected_sec = size / (rate * 1024) * 2
+                dyn_timeout = max(30, expected_sec * 2.5 + 10)
                 t0 = time.monotonic()
                 await ws.send(payload)
-                echo = await asyncio.wait_for(ws.recv(), timeout=30)
+                echo = await asyncio.wait_for(ws.recv(), timeout=dyn_timeout)
                 elapsed = time.monotonic() - t0
                 ok = echo == payload
                 actual = f"{size/elapsed:.0f} B/s" if elapsed > 0.001 else "instant"
-                print(f"  {size:>7} bytes: {elapsed:.3f}s ({actual}, limit {rate} B/s)")
+                print(f"  {size:>7} bytes: {elapsed:.3f}s ({actual}, limit {rate} KB/s)")
                 if not ok:
                     rc = 1
         elif toxic_name == "slicer":

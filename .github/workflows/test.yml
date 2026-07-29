@@ -3,14 +3,33 @@ name: Build and Test
 on: [push, pull_request]
 
 jobs:
-  build:
+  test:
+    name: ${{ matrix.os }} ${{ matrix.arch }}${{ matrix.asan && ' ASan' || '' }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        arch: [x64]
         include:
+          - os: ubuntu-latest
+            arch: x64
+            asan: false
+          - os: ubuntu-latest
+            arch: x64
+            asan: true
+          - os: macos-latest
+            arch: x64
+            asan: false
+          - os: windows-latest
+            arch: x64
+            asan: false
+          - os: windows-latest
+            arch: x64
+            asan: true
           - os: windows-latest
             arch: x86
+            asan: false
+          - os: windows-latest
+            arch: x86
+            asan: true
 
     runs-on: ${{ matrix.os }}
     defaults:
@@ -24,27 +43,53 @@ jobs:
       if: matrix.os == 'windows-latest'
       uses: ilammy/msvc-dev-cmd@v1
       with:
-        arch: ${{ matrix.arch == 'x86' && 'x86' || 'x64' }}
+        arch: ${{ matrix.arch }}
 
     - name: Install Python dependencies
       run: python -m pip install websockets
 
     - name: Configure CMake
+      env:
+        CC: ${{ matrix.os == 'ubuntu-latest' && 'clang' || '' }}
+        CXX: ${{ matrix.os == 'ubuntu-latest' && 'clang++' || '' }}
       run: |
-        cmake -B build -DNEURO_BUILD_TESTS=ON ${{ matrix.os == 'windows-latest' && (matrix.arch == 'x86' && '-A Win32' || format('-A {0}', matrix.arch)) || '' }}
+        cmake -B build -DNEURO_BUILD_TESTS=ON ${{ matrix.asan && '-DNEURO_SANITIZE=ON' || '' }} ${{ matrix.os == 'windows-latest' && (matrix.arch == 'x86' && '-A Win32' || format('-A {0}', matrix.arch)) || '' }}
 
     - name: Build
       run: cmake --build build --config Release
 
+    - name: Locate ASan DLL (Windows only)
+      if: matrix.os == 'windows-latest' && matrix.asan
+      shell: pwsh
+      run: |
+        $dllName = '${{ matrix.arch }}' -eq 'x86' ? 'clang_rt.asan_dynamic-i386.dll' : 'clang_rt.asan_dynamic-x86_64.dll'
+        $v = $env:VCToolsVersion
+        $pattern = "C:/Program Files/Microsoft Visual Studio/*/Enterprise/VC/Tools/MSVC/${v}/bin/Hostx64/${{ matrix.arch }}/${dllName}"
+        $dll = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $dll) {
+          $dll = Get-ChildItem -Path "C:/Program Files/Microsoft Visual Studio/*/Enterprise/VC/Tools/MSVC/*/bin/Hostx64/${{ matrix.arch }}/${dllName}" -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+        if (-not $dll) {
+          $dll = Get-ChildItem -Path "C:/Program Files/Microsoft Visual Studio/*/Community/VC/Tools/MSVC/*/bin/Hostx64/${{ matrix.arch }}/${dllName}" -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+        if ($dll) {
+          echo "ASAN_DLL_DIR=$($dll.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+        } else {
+          echo "ASan DLL not found"
+          exit 1
+        }
+
     - name: Run tests (integration + echo)
       run: |
+        ${{ matrix.os == 'windows-latest' && matrix.asan && 'if ($env:ASAN_DLL_DIR) { $env:PATH = "$env:ASAN_DLL_DIR;$env:PATH" }' || '' }}
         ${{ matrix.os == 'windows-latest' && 'Start-Process -NoNewWindow python -ArgumentList "tests/integration/echo_server.py 9002"' || 'python tests/integration/echo_server.py 9002 &' }}
         sleep 3
-        ${{ matrix.os == 'windows-latest' && 'build\Release\integration_test.exe' || './build/integration_test' }} ws://127.0.0.1:9002/
-        ${{ matrix.os == 'windows-latest' && 'build\Release\echo_test.exe' || './build/echo_test' }} ws://127.0.0.1:9002/
+        ${{ matrix.os == 'windows-latest' && 'build/Release/integration_test.exe' || './build/integration_test' }} ws://127.0.0.1:9002/
+        ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }} ws://127.0.0.1:9002/
+        ${{ matrix.asan && matrix.os == 'windows-latest' && 'python tests/perf/long_run.py ws://127.0.0.1:9002/ 0.083 30' || '' }}
 
     - name: Autobahn fuzzingserver (Linux only)
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.os == 'ubuntu-latest' && matrix.asan == false
       run: |
         mkdir -p reports
         docker run -d -p 9001:9001 \
@@ -56,7 +101,7 @@ jobs:
         sleep 4
 
     - name: Run Autobahn test cases (Linux only)
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.os == 'ubuntu-latest' && matrix.asan == false
       run: |
         for i in $(seq 1 247); do
           if ! ./build/fuzzing_client "$i" "ws://127.0.0.1:9001"; then
@@ -67,7 +112,7 @@ jobs:
         echo "Autobahn: 247/247 passed"
 
     - name: Trigger report finalisation
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.os == 'ubuntu-latest' && matrix.asan == false
       shell: python
       run: |
         import socket, base64, os
@@ -82,7 +127,7 @@ jobs:
         s.send(req.encode()); s.recv(4096); s.close()
 
     - name: Check Autobahn reports (Linux only)
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.os == 'ubuntu-latest' && matrix.asan == false
       shell: python
       run: |
         import json, sys, os
@@ -100,7 +145,7 @@ jobs:
             print(f'{len(c)} cases, all passed')
 
     - name: Install and start Toxiproxy (Linux only)
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.os == 'ubuntu-latest' && matrix.asan == false
       run: |
         wget -q https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/toxiproxy-server-linux-amd64 -O /usr/local/bin/toxiproxy-server
         chmod +x /usr/local/bin/toxiproxy-server
@@ -108,7 +153,7 @@ jobs:
         sleep 2
 
     - name: Run Toxiproxy × slicer (Linux only)
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.os == 'ubuntu-latest' && matrix.asan == false
       run: |
         python tests/handshake/toxiproxy_test.py slicer pre ./build/echo_test
         python tests/handshake/toxiproxy_test.py latency pre ./build/echo_test
@@ -117,7 +162,7 @@ jobs:
         python tests/handshake/toxiproxy_test.py bandwidth pre ./build/echo_test
 
     - name: Run Toxiproxy × bad_handshake (Linux only)
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.os == 'ubuntu-latest' && matrix.asan == false
       run: |
         python tests/handshake/bad_handshake_toxiproxy_test.py ./build/echo_test
 
@@ -127,62 +172,5 @@ jobs:
         ${{ matrix.os == 'windows-latest' && 'Stop-Process -Name python -Force -ErrorAction SilentlyContinue' || 'pkill -f echo_server.py 2>/dev/null || true; pkill -f toxiproxy-server 2>/dev/null || true' }}
 
     - name: Stop Autobahn
-      if: matrix.os == 'ubuntu-latest' && always()
+      if: matrix.os == 'ubuntu-latest' && matrix.asan == false && always()
       run: docker rm -f autobahn
-
-  asan:
-    name: ASan x86 (Windows)
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-    - uses: actions/checkout@v7
-
-    - name: Set up MSVC
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x86
-
-    - name: Install Python dependencies
-      run: python -m pip install websockets
-
-    - name: Configure CMake
-      run: cmake -B build -A Win32 -DNEURO_BUILD_TESTS=ON -DNEURO_SANITIZE=ON
-
-    - name: Build
-      run: cmake --build build --config Release
-
-    - name: Locate ASan DLL and add to PATH
-      shell: pwsh
-      run: |
-        $v = $env:VCToolsVersion
-        $pattern = "C:/Program Files/Microsoft Visual Studio/*/Enterprise/VC/Tools/MSVC/${v}/bin/Hostx64/x86/clang_rt.asan_dynamic-i386.dll"
-        $dll = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $dll) {
-          $dll = Get-ChildItem -Path "C:/Program Files/Microsoft Visual Studio/*/Enterprise/VC/Tools/MSVC/*/bin/Hostx64/x86/clang_rt.asan_dynamic-i386.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-        }
-        if (-not $dll) {
-          $dll = Get-ChildItem -Path "C:/Program Files/Microsoft Visual Studio/*/Community/VC/Tools/MSVC/*/bin/Hostx64/x86/clang_rt.asan_dynamic-i386.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-        }
-        if ($dll) {
-          $dllDir = $dll.DirectoryName
-          echo "ASan DLL found: $dllDir"
-          echo "ASAN_DLL_DIR=$dllDir" | Out-File -FilePath $env:GITHUB_ENV -Append
-        } else {
-          echo "ASan DLL not found"
-          exit 1
-        }
-
-    - name: Run tests (integration + echo + long-run)
-      run: |
-        $env:PATH = "$env:ASAN_DLL_DIR;$env:PATH"
-        Start-Process -NoNewWindow python -ArgumentList "tests/integration/echo_server.py 9002"
-        Start-Sleep 3
-        build/Release/integration_test.exe ws://127.0.0.1:9002/
-        build/Release/echo_test.exe ws://127.0.0.1:9002/
-        python tests/perf/long_run.py ws://127.0.0.1:9002/ 0.083 30
-
-    - name: Stop background servers
-      if: always()
-      run: Stop-Process -Name python -Force -ErrorAction SilentlyContinue

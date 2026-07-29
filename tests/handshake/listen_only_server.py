@@ -3,9 +3,9 @@
 
 NOTE: TCP connect() completes at kernel level (SYN/ACK handshake
 goes to the listen backlog) regardless of accept(). So this tests:
-  "TCP connected, server silent → sock_recv returns EWOULDBLOCK"
+  "TCP connected, server silent -> sock_recv returns EWOULDBLOCK"
 NOT:
-  "connect() still in progress → ws_poll returns WS_EVENT_NONE"
+  "connect() still in progress -> ws_poll returns WS_EVENT_NONE"
 
 For the latter, use an unroutable IP like 192.0.2.1 (TEST-NET-1).
 
@@ -21,7 +21,7 @@ def main():
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(('0.0.0.0', port))
     s.listen(1)
-    # Don't accept() — kernel completes TCP handshake, client's
+    # Don't accept() -- kernel completes TCP handshake, client's
     # send/recv will stall on actual data transfer.
     time.sleep(duration)
     s.close()
