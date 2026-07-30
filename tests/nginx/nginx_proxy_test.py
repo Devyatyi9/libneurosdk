@@ -156,11 +156,11 @@ def main():
     # Debug: probe with real WS upgrade request
     def ws_probe(host, port, label):
         try:
-            import base64, hashlib
+            import base64
             s = socket.socket()
             s.settimeout(5)
             s.connect((host, port))
-            key = base64.b64encode(b"test-probe-key-1234").decode()
+            key = base64.b64encode(os.urandom(16)).decode()
             req = (
                 f"GET / HTTP/1.1\r\n"
                 f"Host: {host}:{port}\r\n"
