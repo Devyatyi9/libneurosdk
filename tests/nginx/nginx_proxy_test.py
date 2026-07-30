@@ -112,7 +112,7 @@ def main():
     # Start nginx
     nginx = subprocess.Popen(
         [nginx_bin, "-p", tmpdir, "-c", conf_path],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     time.sleep(2)
 
     # Ensure proxy port is reachable
@@ -131,7 +131,10 @@ def main():
             time.sleep(0.3)
 
     if not ok:
-        print("nginx did not start on proxy port")
+        err = nginx.stderr.read().decode(errors="replace") if nginx.stderr else ""
+        print(f"nginx did not start on proxy port")
+        if err:
+            print(f"  nginx stderr: {err.strip()}")
         nginx.terminate(); nginx.wait()
         uws.terminate(); uws.wait()
         return 1
