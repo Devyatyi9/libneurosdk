@@ -54,14 +54,14 @@ ECHO_SERVER = os.path.join(ROOT, "tests", "integration", "echo_server.py")
 
 
 def _find_uws():
-    """Locate uws_echo binary across possible build directories."""
+    """Locate uws_echo binary — uws_echo_test.py copies it to project root."""
     exe = ".exe" if sys.platform == "win32" else ""
-    bdirs = [
-        os.path.join(ROOT, "tests", "interop", "build", "Release"),
-        os.path.join(ROOT, "tests", "interop", "build"),
+    candidates = [
+        os.path.join(ROOT, "uws_echo" + exe),
+        os.path.join(ROOT, "tests", "interop", "build", "Release", "uws_echo" + exe),
+        os.path.join(ROOT, "tests", "interop", "build", "uws_echo" + exe),
     ]
-    for d in bdirs:
-        p = os.path.join(d, "uws_echo" + exe)
+    for p in candidates:
         if os.path.isfile(p):
             return p
     return None
