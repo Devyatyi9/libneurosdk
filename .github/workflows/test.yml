@@ -97,6 +97,9 @@ jobs:
       run: |
         python tests/handshake/listen_only_test.py ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }}
 
+    - name: Build + test uWS echo-server
+      run: python tests/interop/uws_echo_test.py 19004
+
     - name: Autobahn fuzzingserver (Linux only)
       if: matrix.os == 'ubuntu-latest' && matrix.asan
       run: |
