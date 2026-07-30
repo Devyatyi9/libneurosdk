@@ -201,17 +201,24 @@ def test_14_bad_handshake():
     assert rc != 0, "expected bad handshake error (404)"
 
 
-def test_15_ipv4_and_ipv6():
-    """#15: IPv4 + IPv6 connectivity."""
+def test_15_ipv4():
+    """#15a: IPv4 connectivity."""
     port = 19108
     proc = _start_uws_or_fallback(port)
     echo_bin = find_echo_test()
-    rc4 = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
-    rc6 = _run_client(echo_bin, f"ws://[::1]:{port}/")
+    rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     proc.terminate(); proc.wait()
-    assert rc4 == 0, f"IPv4 echo failed (exit {rc4})"
-    if rc6 != 0:
-        print(f"  IPv6: skipped (exit {rc6}) — may not be available on this host")
+    assert rc == 0, f"IPv4 echo failed (exit {rc})"
+
+def test_15_ipv6():
+    """#15b: IPv6 connectivity (soft-skip if unavailable)."""
+    port = 19109
+    proc = _start_uws_or_fallback(port)
+    echo_bin = find_echo_test()
+    rc = _run_client(echo_bin, f"ws://[::1]:{port}/")
+    proc.terminate(); proc.wait()
+    if rc != 0:
+        pytest.skip(f"IPv6 not available on this host (exit {rc})")
 
 
 def test_16_flood():
