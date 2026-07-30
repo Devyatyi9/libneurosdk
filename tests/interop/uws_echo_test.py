@@ -21,11 +21,17 @@ def main():
         build_dir = os.path.join(HERE, "build")
         cmake_args = ["cmake", "-S", HERE, "-B", build_dir]
         if sys.platform == "win32":
-            vcpkg_root = os.environ.get("VCPKG_ROOT") or os.path.dirname(
+            vcpkg_root = os.path.dirname(
                 subprocess.check_output(["where", "vcpkg"], text=True).strip())
             toolchain = os.path.join(vcpkg_root, "scripts", "buildsystems", "vcpkg.cmake")
             if os.path.isfile(toolchain):
                 cmake_args.append(f"-DCMAKE_TOOLCHAIN_FILE={toolchain}")
+            else:
+                for fallback in ["C:/vcpkg", os.environ.get("VCPKG_ROOT", "")]:
+                    tc = os.path.join(fallback, "scripts", "buildsystems", "vcpkg.cmake")
+                    if os.path.isfile(tc):
+                        cmake_args.append(f"-DCMAKE_TOOLCHAIN_FILE={tc}")
+                        break
         subprocess.check_call(cmake_args)
         subprocess.check_call(["cmake", "--build", build_dir, "--config", "Release"])
         src = os.path.join(build_dir, "Release" if sys.platform == "win32" else "",
