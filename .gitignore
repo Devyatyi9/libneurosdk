@@ -19,7 +19,7 @@ examples/tictactoe
 *.pdb
 */*.dSYM
 .direnv
-[Bb]uild*
+[Bb]uild*/
 result
 autobahn-reports/*
 __pycache__/
