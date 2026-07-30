@@ -26,7 +26,12 @@ def main():
             machine = platform.machine().lower()
             arch = "x64" if machine in ("amd64", "x86_64", "arm64") else "x86"
             triplet = f"{arch}-windows"
-            cmake_args.append(f"-DCMAKE_PREFIX_PATH={vcpkg_root}/installed/{triplet}")
+            subprocess.check_call(["vcpkg", "install", f"libuv:{triplet}"])
+            pkg_dir = f"{vcpkg_root}/packages/libuv_{triplet}"
+            if os.path.isdir(pkg_dir):
+                cmake_args.append(f"-DCMAKE_PREFIX_PATH={pkg_dir}")
+            else:
+                cmake_args.append(f"-DCMAKE_PREFIX_PATH={vcpkg_root}/installed/{triplet}")
         subprocess.check_call(cmake_args)
         subprocess.check_call(["cmake", "--build", build_dir, "--config", "Release"])
         src = os.path.join(build_dir, "Release" if sys.platform == "win32" else "",
