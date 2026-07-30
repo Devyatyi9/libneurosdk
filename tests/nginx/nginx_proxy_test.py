@@ -102,23 +102,23 @@ def main():
                                   upstream_port=upstream_port)
 
     if sys.platform == "win32":
-        nginx_dir = os.path.dirname(nginx_bin)
+        nginx_prefix = os.path.dirname(nginx_bin)
         for d in ("conf", "logs", "temp"):
-            os.makedirs(os.path.join(nginx_dir, d), exist_ok=True)
-        with open(os.path.join(nginx_dir, "conf", "nginx.conf"), "w") as f:
+            os.makedirs(os.path.join(nginx_prefix, d), exist_ok=True)
+        with open(os.path.join(nginx_prefix, "conf", "nginx.conf"), "w") as f:
             f.write(conf_data)
         nginx = subprocess.Popen(
-            [nginx_bin, "-p", nginx_dir],
+            [nginx_bin, "-p", nginx_prefix],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     else:
-        tmpdir = os.path.join(tempfile.gettempdir(), f"nginx-proxy-test-{proxy_port}")
+        nginx_prefix = os.path.join(tempfile.gettempdir(), f"nginx-proxy-test-{proxy_port}")
         for d in ("", "logs", "temp", "conf"):
-            os.makedirs(os.path.join(tmpdir, d), exist_ok=True)
-        conf_path = os.path.join(tmpdir, "conf", "nginx.conf")
+            os.makedirs(os.path.join(nginx_prefix, d), exist_ok=True)
+        conf_path = os.path.join(nginx_prefix, "conf", "nginx.conf")
         with open(conf_path, "w") as f:
             f.write(conf_data)
         nginx = subprocess.Popen(
-            [nginx_bin, "-p", tmpdir, "-c", conf_path],
+            [nginx_bin, "-p", nginx_prefix, "-c", conf_path],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     time.sleep(2)
@@ -146,6 +146,31 @@ def main():
         nginx.terminate(); nginx.wait()
         uws.terminate(); uws.wait()
         return 1
+
+    # Debug: probe both nginx and upstream
+    import http.client
+
+    def probe(host, port, label):
+        try:
+            conn = http.client.HTTPConnection(host, port, timeout=5)
+            conn.request("GET", "/")
+            resp = conn.getresponse()
+            print(f"  {label}: {resp.status} {resp.reason}")
+            body = resp.read(200)
+            conn.close()
+        except Exception as e:
+            print(f"  {label}: probe failed: {e}")
+
+    probe("127.0.0.1", proxy_port, "nginx")
+    probe("127.0.0.1", upstream_port, "uWS")
+
+    # Also check nginx error log
+    err_log = os.path.join(nginx_prefix, "logs", "error.log")
+    if os.path.isfile(err_log):
+        with open(err_log) as f:
+            err_content = f.read().strip()
+            if err_content:
+                print(f"  nginx error log: {err_content[:300]}")
 
     # Run echo_test through nginx proxy
     url = f"ws://127.0.0.1:{proxy_port}/"
