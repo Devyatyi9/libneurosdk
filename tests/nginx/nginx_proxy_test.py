@@ -75,13 +75,33 @@ def main():
 
     print(f"  nginx: {nginx_bin}")
 
-    # Use echo_server.py as upstream (no DLL/port issues)
-    echo_srv = os.path.join(ROOT, "tests", "integration", "echo_server.py")
-    if not os.path.isfile(echo_srv):
-        print("echo_server.py not found, skipping")
+    # Find uWS echo-server (uv.dll is now copied alongside on Windows)
+    uws_bin = None
+    for p in [
+        os.path.join(ROOT, "uws_echo.exe" if sys.platform == "win32" else "uws_echo"),
+        os.path.join(ROOT, "tests", "interop", "build", "Release",
+                     "uws_echo.exe" if sys.platform == "win32" else "uws_echo"),
+        os.path.join(ROOT, "tests", "interop", "build",
+                     "uws_echo.exe" if sys.platform == "win32" else "uws_echo"),
+    ]:
+        if os.path.isfile(p):
+            uws_bin = p
+            break
+
+    if not uws_bin:
+        print("uWS echo-server not found, skipping")
         return 77
-    upstream = subprocess.Popen([sys.executable, echo_srv, str(upstream_port)],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    uws_env = os.environ.copy()
+    if sys.platform == "win32":
+        dll_dir = os.path.dirname(uws_bin)
+        # uv.dll should be alongside uws_echo.exe now
+        if os.path.isfile(os.path.join(dll_dir, "uv.dll")):
+            uws_env["PATH"] = dll_dir + os.pathsep + uws_env["PATH"]
+
+    upstream = subprocess.Popen([uws_bin, str(upstream_port)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                env=uws_env)
     time.sleep(2)
 
     conf_data = NGINX_CONF.format(proxy_port=proxy_port,
