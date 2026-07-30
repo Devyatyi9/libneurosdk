@@ -33,7 +33,7 @@ def find_nginx():
         return None
 
 
-NGINX_CONF = b"""
+NGINX_CONF = """
 daemon off;
 master_process off;
 worker_processes 1;
@@ -104,7 +104,7 @@ def main():
 
     conf_path = os.path.join(tmpdir, "nginx.conf")
     conf_data = NGINX_CONF.format(proxy_port=proxy_port,
-                                  upstream_port=upstream_port).decode()
+                                  upstream_port=upstream_port)
     with open(conf_path, "w") as f:
         f.write(conf_data)
 
