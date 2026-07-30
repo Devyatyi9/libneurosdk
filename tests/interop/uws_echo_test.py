@@ -25,7 +25,7 @@ def main():
                 subprocess.check_output(["where", "vcpkg"], text=True).splitlines()[0].strip())
             machine = platform.machine().lower()
             arch = "x64" if machine in ("amd64", "x86_64", "arm64") else "x86"
-            triplet = f"{arch}-windows"
+            triplet = f"{arch}-windows-static"
             subprocess.check_call(["vcpkg", "install", f"libuv:{triplet}"])
             pkg_dir = f"{vcpkg_root}/packages/libuv_{triplet}"
             if os.path.isdir(pkg_dir):
@@ -39,36 +39,9 @@ def main():
         if os.path.isfile(src):
             import shutil
             shutil.copy2(src, uws_bin)
-            # Copy uv.dll alongside on Windows (dynamic dependency)
-            if sys.platform == "win32":
-                dll_dir = os.path.join(build_dir, "Release")
-                dll_src = os.path.join(dll_dir, "uv.dll")
-                if not os.path.isfile(dll_src):
-                    # Try vcpkg installed path
-                    machine = platform.machine().lower()
-                    arch = "x64" if machine in ("amd64", "x86_64", "arm64") else "x86"
-                    vcpkg_root = os.path.dirname(
-                        subprocess.check_output(["where", "vcpkg"], text=True).splitlines()[0].strip())
-                    dll_src = os.path.join(vcpkg_root, "installed", f"{arch}-windows", "bin", "uv.dll")
-                if os.path.isfile(dll_src):
-                    shutil.copy2(dll_src, os.path.join(os.path.dirname(uws_bin), "uv.dll"))
-
-    # Add uv.dll path on Windows
-    env = os.environ.copy()
-    if sys.platform == "win32":
-        machine = platform.machine().lower()
-        arch = "x64" if machine in ("amd64", "x86_64", "arm64") else "x86"
-        vcpkg_root = os.path.dirname(
-            subprocess.check_output(["where", "vcpkg"], text=True).splitlines()[0].strip())
-        for candidate in [f"{vcpkg_root}/installed/{arch}-windows/bin",
-                          f"C:/vcpkg/installed/{arch}-windows/bin"]:
-            if os.path.isdir(candidate):
-                env["PATH"] = candidate + os.pathsep + env["PATH"]
-                break
 
     # Start uWS echo-server
-    uws = subprocess.Popen([uws_bin, str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           env=env)
+    uws = subprocess.Popen([uws_bin, str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
 
     # Run echo_test
