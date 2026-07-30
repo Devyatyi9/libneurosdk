@@ -50,15 +50,27 @@ def _run_client(bin_path, url):
 
 # ---- Sanity Checks (#5-#7) ----
 
-def test_5_handshake_and_echo():
-    """#5: Basic handshake + echo via uWS echo-server."""
+ECHO_SERVER = os.path.join(ROOT, "tests", "integration", "echo_server.py")
+
+
+def _start_uws_or_skip(port):
+    """Start uWS echo-server, wait for port, or skip if unavailable."""
     uws_bin = os.path.join(ROOT, "uws_echo.exe" if sys.platform == "win32" else "uws_echo")
     if not os.path.exists(uws_bin):
         pytest.skip("uWS echo-server not built")
-    port = 19100
     proc = subprocess.Popen([uws_bin, str(port)],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)
+    ok = _wait_port(port)
+    if not ok:
+        proc.terminate(); proc.wait()
+        pytest.skip(f"uWS echo-server did not start on port {port}")
+    return proc
+
+
+def test_5_handshake_and_echo():
+    """#5: Basic handshake + echo via uWS echo-server."""
+    port = 19100
+    proc = _start_uws_or_skip(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     proc.terminate(); proc.wait()
@@ -66,32 +78,35 @@ def test_5_handshake_and_echo():
 
 
 def test_6_binary_echo():
-    """#6: Binary message echo via uWS echo-server."""
-    uws_bin = os.path.join(ROOT, "uws_echo.exe" if sys.platform == "win32" else "uws_echo")
-    if not os.path.exists(uws_bin):
-        pytest.skip("uWS echo-server not built")
+    """#6: Binary message echo — use Python echo_server for reliable large payloads."""
     port = 19101
-    proc = subprocess.Popen([uws_bin, str(port)],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)
+    srv = subprocess.Popen([sys.executable, ECHO_SERVER, str(port)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert _wait_port(port), "echo_server.py did not start"
     int_bin = _find_binary("integration_test")
     if not int_bin:
+        srv.terminate(); srv.wait()
         pytest.skip("integration_test not found")
     rc = _run_client(int_bin, f"ws://127.0.0.1:{port}/")
-    proc.terminate(); proc.wait()
+    srv.terminate(); srv.wait()
     assert rc == 0, f"integration_test failed with exit code {rc}"
 
 
 def test_7_normal_close():
-    """#7: Normal closure (1000) — covered by integration_test."""
-    test_6_binary_echo()
+    """#7: Normal closure (1000) — echo_test already covers close."""
+    port = 19102
+    proc = _start_uws_or_skip(port)
+    echo_bin = find_echo_test()
+    rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
+    proc.terminate(); proc.wait()
+    assert rc == 0, f"echo_test normal close failed (exit {rc})"
 
 
 # ---- Network I/O Edge Cases (#8-#20) ----
 
 def test_8_drip_feed():
     """#8: Drip-feed recv — server sends WS frame 1 byte at a time."""
-    port = 19102
+    port = 19113
     srv = _start_server("drip_feed_server.py", port)
     assert _wait_port(port), "drip_feed server did not start"
     echo_bin = find_echo_test()
@@ -175,13 +190,8 @@ def test_14_bad_handshake():
 
 def test_15_ipv4_and_ipv6():
     """#15: IPv4 + IPv6 connectivity via uWS echo-server."""
-    uws_bin = os.path.join(ROOT, "uws_echo.exe" if sys.platform == "win32" else "uws_echo")
-    if not os.path.exists(uws_bin):
-        pytest.skip("uWS echo-server not built")
     port = 19108
-    proc = subprocess.Popen([uws_bin, str(port)],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)
+    proc = _start_uws_or_skip(port)
     echo_bin = find_echo_test()
     rc4 = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     rc6 = _run_client(echo_bin, f"ws://[::1]:{port}/")
@@ -206,13 +216,8 @@ def test_16_flood():
 
 def test_17_double_close():
     """#17: Double close — client calls ws_close() twice."""
-    uws_bin = os.path.join(ROOT, "uws_echo.exe" if sys.platform == "win32" else "uws_echo")
-    if not os.path.exists(uws_bin):
-        pytest.skip("uWS echo-server not built")
     port = 19110
-    proc = subprocess.Popen([uws_bin, str(port)],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)
+    proc = _start_uws_or_skip(port)
     client_bin = _find_binary("test_double_close")
     if not client_bin:
         pytest.skip("test_double_close not built")
