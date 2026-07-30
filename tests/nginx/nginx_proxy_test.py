@@ -37,8 +37,8 @@ NGINX_CONF = """
 daemon off;
 master_process off;
 worker_processes 1;
-error_log stderr;
-pid /dev/null;
+error_log logs/error.log;
+pid logs/nginx.pid;
 
 events {{
     worker_connections 1024;
@@ -98,11 +98,12 @@ def main():
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
 
-    # Create temp dir for nginx
+    # Create temp dir for nginx with required subdirectories
     tmpdir = os.path.join(tempfile.gettempdir(), f"nginx-proxy-test-{proxy_port}")
-    os.makedirs(tmpdir, exist_ok=True)
+    for d in ("", "logs", "temp", "conf"):
+        os.makedirs(os.path.join(tmpdir, d), exist_ok=True)
 
-    conf_path = os.path.join(tmpdir, "nginx.conf")
+    conf_path = os.path.join(tmpdir, "conf", "nginx.conf")
     conf_data = NGINX_CONF.format(proxy_port=proxy_port,
                                   upstream_port=upstream_port)
     with open(conf_path, "w") as f:
@@ -111,8 +112,8 @@ def main():
     # Start nginx
     nginx = subprocess.Popen(
         [nginx_bin, "-p", tmpdir, "-c", conf_path],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    time.sleep(1)
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(2)
 
     # Ensure proxy port is reachable
     import socket
