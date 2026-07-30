@@ -66,24 +66,26 @@ def _find_uws():
             return p
     return None
 
-def _start_uws_or_skip(port):
-    """Start uWS echo-server, wait for port, or skip if unavailable."""
+def _start_uws_or_fallback(port):
+    """Start uWS echo-server, fall back to Python echo_server.py if unavailable."""
     uws_bin = _find_uws()
-    if not uws_bin:
-        pytest.skip("uWS echo-server not built")
-    proc = subprocess.Popen([uws_bin, str(port)],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    ok = _wait_port(port)
-    if not ok:
+    if uws_bin:
+        proc = subprocess.Popen([uws_bin, str(port)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if _wait_port(port):
+            return proc
         proc.terminate(); proc.wait()
-        pytest.skip(f"uWS echo-server did not start on port {port}")
+    # fallback
+    proc = subprocess.Popen([sys.executable, ECHO_SERVER, str(port)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert _wait_port(port), f"echo_server.py did not start on port {port}"
     return proc
 
 
 def test_5_handshake_and_echo():
-    """#5: Basic handshake + echo via uWS echo-server."""
+    """#5: Basic handshake + echo."""
     port = 19100
-    proc = _start_uws_or_skip(port)
+    proc = _start_uws_or_fallback(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     proc.terminate(); proc.wait()
@@ -108,7 +110,7 @@ def test_6_binary_echo():
 def test_7_normal_close():
     """#7: Normal closure (1000) — echo_test already covers close."""
     port = 19102
-    proc = _start_uws_or_skip(port)
+    proc = _start_uws_or_fallback(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     proc.terminate(); proc.wait()
@@ -198,9 +200,9 @@ def test_14_bad_handshake():
 
 
 def test_15_ipv4_and_ipv6():
-    """#15: IPv4 + IPv6 connectivity via uWS echo-server."""
+    """#15: IPv4 + IPv6 connectivity."""
     port = 19108
-    proc = _start_uws_or_skip(port)
+    proc = _start_uws_or_fallback(port)
     echo_bin = find_echo_test()
     rc4 = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     rc6 = _run_client(echo_bin, f"ws://[::1]:{port}/")
@@ -225,7 +227,7 @@ def test_16_flood():
 def test_17_double_close():
     """#17: Double close — client calls ws_close() twice."""
     port = 19110
-    proc = _start_uws_or_skip(port)
+    proc = _start_uws_or_fallback(port)
     client_bin = _find_binary("test_double_close")
     if not client_bin:
         pytest.skip("test_double_close not built")
