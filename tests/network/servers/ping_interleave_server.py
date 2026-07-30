@@ -5,7 +5,7 @@ Tests #18: ping interleaving — client must handle control frames
 """
 import os, socket, struct, time, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ws_frame import build_frame, build_ping, build_fragment, HTTP_101
+from ws_frame import build_frame, build_ping, build_fragment, read_http_upgrade, make_101
 
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 19011
@@ -19,13 +19,10 @@ srv.settimeout(60)
 try:
     conn, addr = srv.accept()
     conn.settimeout(10)
-    data = b""
-    while b"\r\n\r\n" not in data:
-        chunk = conn.recv(4096)
-        if not chunk:
-            break
-        data += chunk
-    conn.sendall(HTTP_101)
+    data, key = read_http_upgrade(conn)
+    if key is None:
+        conn.close(); srv.close(); sys.exit(0)
+    conn.sendall(make_101(key))
     time.sleep(0.1)
     # Send fragmented message: FIN=0, opcode=text (start)
     part1 = b"Hello, this is the first part "

@@ -5,7 +5,7 @@ dropping frames or leaking memory.
 """
 import os, socket, struct, time, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ws_frame import build_text, HTTP_101
+from ws_frame import build_text, read_http_upgrade, make_101
 
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 19006
@@ -20,13 +20,10 @@ srv.settimeout(60)
 try:
     conn, addr = srv.accept()
     conn.settimeout(10)
-    data = b""
-    while b"\r\n\r\n" not in data:
-        chunk = conn.recv(4096)
-        if not chunk:
-            break
-        data += chunk
-    conn.sendall(HTTP_101)
+    data, key = read_http_upgrade(conn)
+    if key is None:
+        conn.close(); srv.close(); sys.exit(0)
+    conn.sendall(make_101(key))
     time.sleep(0.1)
     for i in range(COUNT):
         frame = build_text(f"msg{i}")

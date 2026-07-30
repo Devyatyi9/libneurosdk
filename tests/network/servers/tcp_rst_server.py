@@ -3,7 +3,10 @@
 Tests #12: TCP RST — client must detect abrupt connection reset.
 Sets SO_LINGER to 0 so close() sends RST instead of FIN.
 """
-import socket, struct, sys, time
+import os, socket, struct, sys, time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ws_frame import read_http_upgrade, make_101
 
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 19009
@@ -17,21 +20,12 @@ srv.settimeout(30)
 try:
     conn, addr = srv.accept()
     conn.settimeout(5)
-    # Read HTTP upgrade
-    data = b""
-    while b"\r\n\r\n" not in data:
-        chunk = conn.recv(4096)
-        if not chunk:
-            break
-        data += chunk
-    # Send partial 101 then RST
-    resp = (
-        b"HTTP/1.1 101 Switching Protocols\r\n"
-        b"Upgrade: websocket\r\n"
-        b"Connection: Upgrade\r\n"
-    )
+    data, key = read_http_upgrade(conn)
+    if key is None:
+        conn.close(); srv.close(); sys.exit(0)
+    # Send partial 101 then RST (intentionally drop before Accept header)
     try:
-        conn.sendall(resp)
+        conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\n")
     except OSError:
         pass
     # Set SO_LINGER=0 to force RST on close

@@ -3,7 +3,10 @@
 Tests #9: partial send() — causes client's TCP send buffer to fill,
 triggering EAGAIN/WSAEWOULDBLOCK in sock_send_all().
 """
-import socket, time, sys
+import os, socket, time, sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ws_frame import read_http_upgrade, make_101
 
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 19005
@@ -17,23 +20,10 @@ srv.settimeout(120)
 try:
     conn, addr = srv.accept()
     conn.settimeout(60)
-    # Read HTTP upgrade byte by byte (very slowly)
-    data = b""
-    while b"\r\n\r\n" not in data:
-        b = conn.recv(1)
-        if not b:
-            break
-        data += b
-        time.sleep(0.05)
-    # Send 101
-    resp = (
-        b"HTTP/1.1 101 Switching Protocols\r\n"
-        b"Upgrade: websocket\r\n"
-        b"Connection: Upgrade\r\n"
-        b"Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"
-        b"\r\n"
-    )
-    conn.sendall(resp)
+    data, key = read_http_upgrade(conn)
+    if key is None:
+        conn.close(); srv.close(); sys.exit(0)
+    conn.sendall(make_101(key))
     # Now read client data as slowly as possible
     # The client is trying to send 10MB — we drain it at 1 byte/50ms
     total = 0
