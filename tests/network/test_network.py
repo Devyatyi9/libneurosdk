@@ -73,11 +73,11 @@ def _start_uws_or_fallback(port):
         proc = subprocess.Popen([uws_bin, str(port)],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if _wait_port(port):
-            print(f"  server: uWS ({uws_bin})")
+            sys.stderr.write(f"  server: uWS ({uws_bin})\n")
             return proc
         proc.terminate(); proc.wait()
     # fallback
-    print(f"  server: echo_server.py (fallback, uWS not found)")
+    sys.stderr.write(f"  server: echo_server.py (fallback, uWS not found)\n")
     proc = subprocess.Popen([sys.executable, ECHO_SERVER, str(port)],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     assert _wait_port(port), f"echo_server.py did not start on port {port}"
