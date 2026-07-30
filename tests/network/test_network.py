@@ -53,10 +53,23 @@ def _run_client(bin_path, url):
 ECHO_SERVER = os.path.join(ROOT, "tests", "integration", "echo_server.py")
 
 
+def _find_uws():
+    """Locate uws_echo binary across possible build directories."""
+    exe = ".exe" if sys.platform == "win32" else ""
+    bdirs = [
+        os.path.join(ROOT, "tests", "interop", "build", "Release"),
+        os.path.join(ROOT, "tests", "interop", "build"),
+    ]
+    for d in bdirs:
+        p = os.path.join(d, "uws_echo" + exe)
+        if os.path.isfile(p):
+            return p
+    return None
+
 def _start_uws_or_skip(port):
     """Start uWS echo-server, wait for port, or skip if unavailable."""
-    uws_bin = os.path.join(ROOT, "uws_echo.exe" if sys.platform == "win32" else "uws_echo")
-    if not os.path.exists(uws_bin):
+    uws_bin = _find_uws()
+    if not uws_bin:
         pytest.skip("uWS echo-server not built")
     proc = subprocess.Popen([uws_bin, str(port)],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
