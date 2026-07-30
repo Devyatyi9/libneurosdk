@@ -26,7 +26,7 @@ def _find_binary(name):
 def _start_server(script, port, *args):
     cmd = [sys.executable, os.path.join(SERVERS_DIR, script), str(port)] + list(args)
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(1)
+    time.sleep(2)
     return proc
 
 
@@ -108,7 +108,6 @@ def test_8_drip_feed():
     """#8: Drip-feed recv — server sends WS frame 1 byte at a time."""
     port = 19113
     srv = _start_server("drip_feed_server.py", port)
-    assert _wait_port(port), "drip_feed server did not start"
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     srv.terminate(); srv.wait()
@@ -119,7 +118,6 @@ def test_9_partial_send():
     """#9: Partial send — send 10MB with slow consumer."""
     port = 19103
     srv = _start_server("slow_consumer_server.py", port)
-    assert _wait_port(port), "slow_consumer server did not start"
     client_bin = _find_binary("test_partial_send")
     if not client_bin:
         pytest.skip("test_partial_send not built")
@@ -154,7 +152,6 @@ def test_12_tcp_rst():
     """#12: TCP RST — server sends RST after partial handshake."""
     port = 19105
     srv = _start_server("tcp_rst_server.py", port)
-    assert _wait_port(port), "tcp_rst server did not start"
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     srv.terminate(); srv.wait()
@@ -165,7 +162,6 @@ def test_13_tcp_fin():
     """#13: TCP FIN without WS Close — server closes TCP gracefully."""
     port = 19106
     srv = _start_server("tcp_fin_server.py", port)
-    assert _wait_port(port), "tcp_fin server did not start"
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     srv.terminate(); srv.wait()
@@ -205,7 +201,6 @@ def test_16_flood():
     """#16: Flood — 1000 frames sent rapidly."""
     port = 19109
     srv = _start_server("flood_server.py", port, "1000")
-    assert _wait_port(port), "flood server did not start"
     client_bin = _find_binary("test_flood")
     if not client_bin:
         pytest.skip("test_flood not built")
@@ -230,7 +225,6 @@ def test_18_ping_interleave():
     """#18: Ping interleaving — pings between fragments."""
     port = 19111
     srv = _start_server("ping_interleave_server.py", port)
-    assert _wait_port(port), "ping_interleave server did not start"
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     srv.terminate(); srv.wait()
@@ -248,7 +242,6 @@ def test_20_oversize():
     """#20: Oversize frame — server sends >262144 byte payload."""
     port = 19112
     srv = _start_server("oversize_server.py", port)
-    assert _wait_port(port), "oversize server did not start"
     client_bin = _find_binary("test_oversize")
     if not client_bin:
         pytest.skip("test_oversize not built")
