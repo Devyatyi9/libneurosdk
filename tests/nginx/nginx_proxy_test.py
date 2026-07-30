@@ -73,29 +73,15 @@ def main():
         print("echo_test not found, skipping")
         return 77
 
-    # Start uWS echo-server
-    uws_bin = None
-    for p in [
-        os.path.join(ROOT, "uws_echo.exe" if sys.platform == "win32" else "uws_echo"),
-        os.path.join(ROOT, "tests", "interop", "build", "Release",
-                     "uws_echo.exe" if sys.platform == "win32" else "uws_echo"),
-        os.path.join(ROOT, "tests", "interop", "build",
-                     "uws_echo.exe" if sys.platform == "win32" else "uws_echo"),
-    ]:
-        if os.path.isfile(p):
-            uws_bin = p
-            break
-
-    if not uws_bin:
-        print("uWS echo-server not found, skipping")
-        return 77
-
-    print(f"  uWS: {uws_bin}")
     print(f"  nginx: {nginx_bin}")
 
-    # Start uWS
-    uws = subprocess.Popen([uws_bin, str(upstream_port)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Use echo_server.py as upstream (no DLL/port issues)
+    echo_srv = os.path.join(ROOT, "tests", "integration", "echo_server.py")
+    if not os.path.isfile(echo_srv):
+        print("echo_server.py not found, skipping")
+        return 77
+    upstream = subprocess.Popen([sys.executable, echo_srv, str(upstream_port)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
 
     conf_data = NGINX_CONF.format(proxy_port=proxy_port,
@@ -144,7 +130,7 @@ def main():
         if err:
             print(f"  nginx stderr: {err.strip()}")
         nginx.terminate(); nginx.wait()
-        uws.terminate(); uws.wait()
+        upstream.terminate(); upstream.wait()
         return 1
 
     # Debug: probe both nginx and upstream
@@ -162,7 +148,7 @@ def main():
             print(f"  {label}: probe failed: {e}")
 
     probe("127.0.0.1", proxy_port, "nginx")
-    probe("127.0.0.1", upstream_port, "uWS")
+    probe("127.0.0.1", upstream_port, "upstream")
 
     # Also check nginx error log
     err_log = os.path.join(nginx_prefix, "logs", "error.log")
@@ -178,7 +164,7 @@ def main():
     rc = subprocess.call([echo_bin, url], env=env)
 
     nginx.terminate(); nginx.wait()
-    uws.terminate(); uws.wait()
+    upstream.terminate(); upstream.wait()
 
     if rc != 0:
         print(f"nginx proxy test FAILED (exit={rc})")

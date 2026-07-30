@@ -39,6 +39,19 @@ def main():
         if os.path.isfile(src):
             import shutil
             shutil.copy2(src, uws_bin)
+            # Copy uv.dll alongside on Windows (dynamic dependency)
+            if sys.platform == "win32":
+                dll_dir = os.path.join(build_dir, "Release")
+                dll_src = os.path.join(dll_dir, "uv.dll")
+                if not os.path.isfile(dll_src):
+                    # Try vcpkg installed path
+                    machine = platform.machine().lower()
+                    arch = "x64" if machine in ("amd64", "x86_64", "arm64") else "x86"
+                    vcpkg_root = os.path.dirname(
+                        subprocess.check_output(["where", "vcpkg"], text=True).splitlines()[0].strip())
+                    dll_src = os.path.join(vcpkg_root, "installed", f"{arch}-windows", "bin", "uv.dll")
+                if os.path.isfile(dll_src):
+                    shutil.copy2(dll_src, os.path.join(os.path.dirname(uws_bin), "uv.dll"))
 
     # Add uv.dll path on Windows
     env = os.environ.copy()
