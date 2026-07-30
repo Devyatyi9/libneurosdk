@@ -107,22 +107,28 @@ jobs:
     - name: Build + test uWS echo-server
       run: python tests/interop/uws_echo_test.py 19004
 
-    - name: Install nginx
+    - name: Install nginx (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: sudo apt-get install -y nginx
+
+    - name: Install nginx (macOS)
+      if: matrix.os == 'macos-latest'
+      run: brew install nginx
+
+    - name: Install nginx (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
       run: |
-        ${{ matrix.os == 'ubuntu-latest' && 'sudo apt-get install -y nginx' || '' }}
-        ${{ matrix.os == 'macos-latest' && 'brew install nginx' || '' }}
-        ${{ matrix.os == 'windows-latest' && '
-          curl.exe -sL https://nginx.org/download/nginx-1.27.4.zip -o C:\nginx.zip
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::ExtractToDirectory("C:\nginx.zip", "C:\")
-          echo "C:\nginx-1.27.4" | Out-File -FilePath $env:GITHUB_PATH -Append
-        ' || '' }}
+        curl.exe -sL https://nginx.org/download/nginx-1.27.4.zip -o C:\nginx.zip
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory("C:\nginx.zip", "C:\")
+        echo "C:\nginx-1.27.4" | Out-File -FilePath $env:GITHUB_PATH -Append
 
     - name: Test nginx WebSocket proxy
       run: python tests/nginx/nginx_proxy_test.py
 
     - name: Run network I/O tests
-  run: python -m pytest tests/network/test_network.py -v -x -s
+      run: python -m pytest tests/network/test_network.py -v -x -s
 
     - name: Autobahn fuzzingserver (Linux only)
       if: matrix.os == 'ubuntu-latest' && matrix.asan
