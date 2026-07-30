@@ -98,21 +98,29 @@ def main():
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
 
-    # Create temp dir for nginx with required subdirectories
-    tmpdir = os.path.join(tempfile.gettempdir(), f"nginx-proxy-test-{proxy_port}")
-    for d in ("", "logs", "temp", "conf"):
-        os.makedirs(os.path.join(tmpdir, d), exist_ok=True)
-
-    conf_path = os.path.join(tmpdir, "conf", "nginx.conf")
     conf_data = NGINX_CONF.format(proxy_port=proxy_port,
                                   upstream_port=upstream_port)
-    with open(conf_path, "w") as f:
-        f.write(conf_data)
 
-    # Start nginx
-    nginx = subprocess.Popen(
-        [nginx_bin, "-p", tmpdir, "-c", conf_path],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if sys.platform == "win32":
+        nginx_dir = os.path.dirname(nginx_bin)
+        for d in ("conf", "logs", "temp"):
+            os.makedirs(os.path.join(nginx_dir, d), exist_ok=True)
+        with open(os.path.join(nginx_dir, "conf", "nginx.conf"), "w") as f:
+            f.write(conf_data)
+        nginx = subprocess.Popen(
+            [nginx_bin, "-p", nginx_dir],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    else:
+        tmpdir = os.path.join(tempfile.gettempdir(), f"nginx-proxy-test-{proxy_port}")
+        for d in ("", "logs", "temp", "conf"):
+            os.makedirs(os.path.join(tmpdir, d), exist_ok=True)
+        conf_path = os.path.join(tmpdir, "conf", "nginx.conf")
+        with open(conf_path, "w") as f:
+            f.write(conf_data)
+        nginx = subprocess.Popen(
+            [nginx_bin, "-p", tmpdir, "-c", conf_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
     time.sleep(2)
 
     # Ensure proxy port is reachable
