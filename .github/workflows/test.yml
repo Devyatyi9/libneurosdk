@@ -52,7 +52,7 @@ jobs:
         arch: ${{ matrix.arch }}
 
     - name: Install Python dependencies
-      run: python -m pip install websockets
+      run: python -m pip install websockets pytest
 
     - name: Configure CMake
       env:
@@ -97,8 +97,18 @@ jobs:
       run: |
         python tests/handshake/listen_only_test.py ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }}
 
+    - name: Run unit tests
+      run: |
+        ${{ matrix.os == 'windows-latest' && 'build/Release/test_url.exe' || './build/test_url' }}
+        ${{ matrix.os == 'windows-latest' && 'build/Release/test_sha1.exe' || './build/test_sha1' }}
+        ${{ matrix.os == 'windows-latest' && 'build/Release/test_base64.exe' || './build/test_base64' }}
+        ${{ matrix.os == 'windows-latest' && 'build/Release/test_frame.exe' || './build/test_frame' }}
+
     - name: Build + test uWS echo-server
       run: python tests/interop/uws_echo_test.py 19004
+
+    - name: Run network I/O tests
+      run: python -m pytest tests/network/test_network.py -v -x
 
     - name: Autobahn fuzzingserver (Linux only)
       if: matrix.os == 'ubuntu-latest' && matrix.asan
@@ -157,7 +167,6 @@ jobs:
             print(f'{len(c)} cases, all passed')
 
     - name: Install and start Toxiproxy
-      if: matrix.asan
       run: |
         ${{ matrix.os == 'ubuntu-latest' && 'wget -q https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/toxiproxy-server-linux-amd64 -O /tmp/toxiproxy-server && chmod +x /tmp/toxiproxy-server' || '' }}
         ${{ matrix.os == 'macos-latest' && 'curl -sL https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/toxiproxy-server-darwin-arm64 -o /tmp/toxiproxy-server && chmod +x /tmp/toxiproxy-server' || '' }}
@@ -166,7 +175,6 @@ jobs:
         sleep 2
 
     - name: Run Toxiproxy tests
-      if: matrix.asan
       run: |
         python tests/handshake/toxiproxy_test.py slicer pre ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }}
         python tests/handshake/toxiproxy_test.py latency pre ${{ matrix.os == 'windows-latest' && 'build/Release/echo_test.exe' || './build/echo_test' }}
