@@ -11,21 +11,41 @@ from test_utils import build_env, find_echo_test
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 19004
 
-    # Build uWS echo-server if missing
+    # Build uWS echo-server via CMake if missing
     uws_bin = os.path.join(ROOT, "uws_echo.exe" if sys.platform == "win32" else "uws_echo")
     if not os.path.isfile(uws_bin):
-        subprocess.check_call([sys.executable, os.path.join(HERE, "build_uws.py")])
+        uws_dir = os.path.join(HERE, "uWebSockets")
+        if not os.path.isdir(uws_dir):
+            subprocess.check_call(["git", "clone", "--recursive",
+                                   "https://github.com/uWebSockets/uWebSockets", uws_dir])
+        build_dir = os.path.join(HERE, "build")
+        cmake_args = ["cmake", "-S", HERE, "-B", build_dir]
+        if sys.platform == "win32":
+            vcpkg_root = os.environ.get("VCPKG_ROOT") or os.path.dirname(
+                subprocess.check_output(["where", "vcpkg"], text=True).strip())
+            toolchain = os.path.join(vcpkg_root, "scripts", "buildsystems", "vcpkg.cmake")
+            if os.path.isfile(toolchain):
+                cmake_args.append(f"-DCMAKE_TOOLCHAIN_FILE={toolchain}")
+        subprocess.check_call(cmake_args)
+        subprocess.check_call(["cmake", "--build", build_dir, "--config", "Release"])
+        src = os.path.join(build_dir, "Release" if sys.platform == "win32" else "",
+                           "uws_echo.exe" if sys.platform == "win32" else "uws_echo")
+        if os.path.isfile(src):
+            import shutil
+            shutil.copy2(src, uws_bin)
 
     # Add uv.dll path on Windows
     env = os.environ.copy()
     if sys.platform == "win32":
         machine = platform.machine().lower()
         arch = "x64" if machine in ("amd64", "x86_64", "arm64") else "x86"
-        vcpkg_root = env.get("VCPKG_ROOT") or os.path.dirname(
+        vcpkg_root = os.path.dirname(
             subprocess.check_output(["where", "vcpkg"], text=True).strip())
-        dll_dir = f"{vcpkg_root}/installed/{arch}-windows/bin"
-        if os.path.isdir(dll_dir):
-            env["PATH"] = dll_dir + os.pathsep + env["PATH"]
+        for candidate in [f"{vcpkg_root}/installed/{arch}-windows/bin",
+                          f"C:/vcpkg/installed/{arch}-windows/bin"]:
+            if os.path.isdir(candidate):
+                env["PATH"] = candidate + os.pathsep + env["PATH"]
+                break
 
     # Start uWS echo-server
     uws = subprocess.Popen([uws_bin, str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
