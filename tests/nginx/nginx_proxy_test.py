@@ -40,13 +40,13 @@ worker_processes 1;
 error_log stderr;
 pid /dev/null;
 
-events {
+events {{
     worker_connections 1024;
-}
+}}
 
-http {
+http {{
     access_log off;
-    server {
+    server {{
         listen 127.0.0.1:{proxy_port};
         location / {{
             proxy_pass http://127.0.0.1:{upstream_port};
