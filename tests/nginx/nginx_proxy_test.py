@@ -153,22 +153,32 @@ def main():
         upstream.terminate(); upstream.wait()
         return 1
 
-    # Debug: probe both nginx and upstream
-    import http.client
-
-    def probe(host, port, label):
+    # Debug: probe with real WS upgrade request
+    def ws_probe(host, port, label):
         try:
-            conn = http.client.HTTPConnection(host, port, timeout=5)
-            conn.request("GET", "/")
-            resp = conn.getresponse()
-            print(f"  {label}: {resp.status} {resp.reason}")
-            body = resp.read(200)
-            conn.close()
+            import base64, hashlib
+            s = socket.socket()
+            s.settimeout(5)
+            s.connect((host, port))
+            key = base64.b64encode(b"test-probe-key-1234").decode()
+            req = (
+                f"GET / HTTP/1.1\r\n"
+                f"Host: {host}:{port}\r\n"
+                f"Upgrade: websocket\r\n"
+                f"Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\n"
+                f"Sec-WebSocket-Version: 13\r\n\r\n"
+            ).encode()
+            s.send(req)
+            resp = s.recv(4096)
+            status = resp[:resp.index(b"\r\n")].decode()
+            print(f"  {label}: {status}")
+            s.close()
         except Exception as e:
             print(f"  {label}: probe failed: {e}")
 
-    probe("127.0.0.1", proxy_port, "nginx")
-    probe("127.0.0.1", upstream_port, "upstream")
+    ws_probe("127.0.0.1", proxy_port, "nginx")
+    ws_probe("127.0.0.1", upstream_port, "upstream")
 
     # Also check nginx error log
     err_log = os.path.join(nginx_prefix, "logs", "error.log")
