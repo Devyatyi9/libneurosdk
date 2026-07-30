@@ -22,7 +22,7 @@ def main():
         cmake_args = ["cmake", "-S", HERE, "-B", build_dir]
         if sys.platform == "win32":
             vcpkg_root = os.path.dirname(
-                subprocess.check_output(["where", "vcpkg"], text=True).strip())
+                subprocess.check_output(["where", "vcpkg"], text=True).splitlines()[0].strip())
             machine = platform.machine().lower()
             arch = "x64" if machine in ("amd64", "x86_64", "arm64") else "x86"
             triplet = f"{arch}-windows"
@@ -41,7 +41,7 @@ def main():
         machine = platform.machine().lower()
         arch = "x64" if machine in ("amd64", "x86_64", "arm64") else "x86"
         vcpkg_root = os.path.dirname(
-            subprocess.check_output(["where", "vcpkg"], text=True).strip())
+            subprocess.check_output(["where", "vcpkg"], text=True).splitlines()[0].strip())
         for candidate in [f"{vcpkg_root}/installed/{arch}-windows/bin",
                           f"C:/vcpkg/installed/{arch}-windows/bin"]:
             if os.path.isdir(candidate):
