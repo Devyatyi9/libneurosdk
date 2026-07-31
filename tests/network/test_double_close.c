@@ -10,7 +10,7 @@
 #endif
 
 static int s_connected = 0;
-static int s_done = 0;
+static int s_failed = 0;
 
 static void on_open(ws_t *ws, void *userdata) {
     (void)userdata;
@@ -26,13 +26,12 @@ static void on_message(ws_t *ws, const char *data, size_t len, int binary, void 
 
 static void on_close(ws_t *ws, uint16_t code, const char *reason, size_t reason_len, void *userdata) {
     (void)ws; (void)code; (void)reason; (void)reason_len; (void)userdata;
-    s_done = 1;
 }
 
 static void on_error(ws_t *ws, const char *msg, void *userdata) {
     (void)ws; (void)userdata;
     fprintf(stderr, "FAIL: error: %s\n", msg);
-    s_done = 1;
+    s_failed = 1;
 }
 
 int main(int argc, char *argv[]) {
@@ -43,12 +42,23 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "FAIL: ws_connect\n");
         return 1;
     }
-    int budget = 500;
-    while (!s_done && budget > 0) {
+    /* Second ws_close() transitions CLOSING→CLOSED directly (no on_close
+     * callback), so wait for the state explicitly. Budget is small since
+     * ws_poll() in CLOSED returns immediately. */
+    int budget = 100;
+    while (ws_state(ws) != WS_STATE_CLOSED && budget > 0) {
         ws_poll(ws, 100);
         budget--;
     }
+    if (!s_connected) { fprintf(stderr, "FAIL: never connected\n"); ws_destroy(ws); return 1; }
+    if (s_failed) { ws_destroy(ws); return 1; }
+    if (ws_state(ws) != WS_STATE_CLOSED) {
+        fprintf(stderr, "FAIL: state=%d, expected WS_STATE_CLOSED\n", ws_state(ws));
+        ws_destroy(ws);
+        return 1;
+    }
+    /* Calling ws_close() again via ws_destroy() must be safe (no double-free) */
     ws_destroy(ws);
-    if (!s_connected) { fprintf(stderr, "FAIL: never connected\n"); return 1; }
+    printf("OK: double ws_close reached CLOSED without crash\n");
     return 0;
 }

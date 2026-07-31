@@ -12,6 +12,7 @@
 static int s_connected = 0;
 static int s_done = 0;
 static int s_got_error = 0;
+static int s_failed = 0;
 
 static void on_open(ws_t *ws, void *userdata) {
     (void)ws; (void)userdata;
@@ -22,6 +23,7 @@ static void on_message(ws_t *ws, const char *data, size_t len, int binary, void 
     (void)ws; (void)data; (void)len; (void)binary; (void)userdata;
     /* Should not receive a full message due to oversized frame */
     fprintf(stderr, "FAIL: unexpected message (%zu bytes)\n", len);
+    s_failed = 1;
 }
 
 static void on_close(ws_t *ws, uint16_t code, const char *reason, size_t reason_len, void *userdata) {
@@ -57,6 +59,7 @@ int main(int argc, char *argv[]) {
     }
     ws_destroy(ws);
     if (!s_connected) { fprintf(stderr, "FAIL: never connected\n"); return 1; }
+    if (s_failed) { fprintf(stderr, "FAIL: unexpected message received\n"); return 1; }
     /* Expect either on_error or on_close with 1009 */
     if (!s_got_error && !s_done) {
         fprintf(stderr, "FAIL: no error/close triggered\n");

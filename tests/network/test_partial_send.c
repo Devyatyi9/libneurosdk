@@ -11,7 +11,7 @@
 #endif
 
 static int s_connected = 0;
-static int s_got_message = 0;
+static int s_failed = 0;
 static int s_done = 0;
 
 static void on_open(ws_t *ws, void *userdata) {
@@ -19,24 +19,22 @@ static void on_open(ws_t *ws, void *userdata) {
     s_connected = 1;
     size_t size = 10 * 1024 * 1024; /* 10 MB */
     char *big = (char *)malloc(size);
-    if (!big) { fprintf(stderr, "OOM\n"); exit(1); }
+    if (!big) { fprintf(stderr, "FAIL: OOM\n"); s_failed = 1; s_done = 1; return; }
     memset(big, 'A', size);
     int rc = ws_send(ws, big, size);
     free(big);
     if (rc != 0) {
         fprintf(stderr, "FAIL: ws_send returned %d\n", rc);
-        s_done = 1;
+        s_failed = 1;
     }
 }
 
 static void on_message(ws_t *ws, const char *data, size_t len, int binary, void *userdata) {
     (void)ws; (void)data; (void)binary; (void)userdata;
-    /* Server echoes our huge message back */
-    if (len == 10 * 1024 * 1024) {
-        s_got_message = 1;
-    } else {
-        fprintf(stderr, "FAIL: echo size mismatch: got %zu, expected %d\n", len, 10*1024*1024);
-    }
+    /* The slow-consumer server sends a fixed small "Hello" by design — it
+     * does NOT echo the 10MB back. Any message here proves the WS stream
+     * stayed intact through the huge partial send. */
+    printf("info: server replied with %zu-byte message\n", len);
     ws_close(ws);
 }
 
@@ -48,6 +46,7 @@ static void on_close(ws_t *ws, uint16_t code, const char *reason, size_t reason_
 static void on_error(ws_t *ws, const char *msg, void *userdata) {
     (void)ws; (void)userdata;
     fprintf(stderr, "FAIL: error: %s\n", msg);
+    s_failed = 1;
     s_done = 1;
 }
 
@@ -66,7 +65,8 @@ int main(int argc, char *argv[]) {
     }
     ws_destroy(ws);
     if (!s_connected) { fprintf(stderr, "FAIL: never connected\n"); return 1; }
-    /* Test PASSES even if server doesn't echo (server echoes slowly) —
-     * the goal is that ws_send succeeded and no crash occurred. */
+    if (s_failed) return 1;
+    /* Test passes only if the 10MB ws_send completed without error and the
+     * stream stayed intact (server's small reply arrived, or clean close). */
     return 0;
 }
