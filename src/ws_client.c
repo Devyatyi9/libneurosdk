@@ -82,10 +82,19 @@ struct ws_t {
   uint16_t port;
   char *path;
 
+  /* HTTP CONNECT proxy (optional). proxy_host != NULL when proxying. */
+  char *proxy_host;
+  uint16_t proxy_port;
+  char *proxy_auth;  /* base64 "user:pass", or NULL */
+
   /* Resolved address list (getaddrinfo, AF_UNSPEC) + current attempt.
    * Freed via freeaddrinfo() when the connection opens or is destroyed. */
   struct addrinfo *ai_list;
   struct addrinfo *ai_cur;
+
+  /* Proxy tunnel state */
+  int proxy_tunnel_sent;  /* CONNECT request already sent */
+  int proxy_tunnel_done;  /* 200 Connection Established received */
 
   /* Upgrade response state */
   int upgrade_done;
@@ -97,6 +106,19 @@ struct ws_t {
   unsigned char *frag_buf;
   size_t frag_len;
   size_t frag_cap;
+
+  /* Large single-frame streaming (OPEN state). When a data frame's
+   * payload is too big to fit in the fixed recv_buf, the bytes are
+   * accumulated here (into frag_buf) across ws_poll() calls instead
+   * of erroring out with "message exceeds receive buffer size". */
+  int stream_active;          /* currently streaming a large frame */
+  int stream_fin;             /* FIN bit of the streamed frame */
+  unsigned char stream_opcode;
+  int stream_masked;          /* frame carried a client mask (defensive) */
+  unsigned char stream_mask[4];
+  uint64_t stream_payload_len;    /* total payload length of the frame */
+  uint64_t stream_payload_recvd;  /* payload bytes received so far */
+  uint64_t stream_remaining;      /* payload bytes still to receive */
 
   /* Close handshake state */
   int closing_initiated;  /* non-zero if WE initiated the close */
@@ -487,6 +509,152 @@ static void base64_encode(const unsigned char *in, size_t inlen, char *out, size
 }
 
 /* ================================================================== */
+/*  HTTP CONNECT proxy                                                 */
+/* ================================================================== */
+
+/* Parse a proxy string: "host:port", "http://host:port",
+ * "http://user:pass@host:port". Scheme (http://) is optional but only
+ * http is accepted (CONNECT works over plain TCP). Credentials, if any,
+ * are base64-encoded into *auth_out (may be NULL). */
+static int parse_proxy_url(const char *proxy, char **host, uint16_t *port, char **auth) {
+  *host = NULL;
+  *auth = NULL;
+  *port = 8080; /* common HTTP proxy default */
+
+  const char *p = proxy;
+  if (strncmp(p, "http://", 7) == 0) p += 7;
+  else if (strncmp(p, "https://", 8) == 0) return -1; /* no TLS to proxy */
+
+  /* user:pass@host:port */
+  const char *at = strrchr(p, '@');
+  if (at) {
+    size_t ulen = (size_t)(at - p);
+    if (ulen == 0 || ulen >= 256) return -1;
+    char userpass[256];
+    memcpy(userpass, p, ulen);
+    userpass[ulen] = '\0';
+    char b64[512];
+    base64_encode((const unsigned char *)userpass, ulen, b64, sizeof(b64));
+    *auth = (char *)malloc(strlen(b64) + 1);
+    if (!*auth) return -1;
+    strcpy(*auth, b64);
+    p = at + 1;
+  }
+
+  /* host[:port] -- hostname or bracketed IPv6 */
+  const char *host_start;
+  size_t host_len;
+  if (*p == '[') {
+    p++;
+    host_start = p;
+    while (*p && *p != ']') p++;
+    if (*p != ']') return -1;
+    host_len = (size_t)(p - host_start);
+    p++;
+  } else {
+    host_start = p;
+    while (*p && *p != ':' && *p != '/') p++;
+    host_len = (size_t)(p - host_start);
+  }
+  if (host_len == 0) return -1;
+
+  *host = (char *)malloc(host_len + 1);
+  if (!*host) { free(*auth); *auth = NULL; return -1; }
+  memcpy(*host, host_start, host_len);
+  (*host)[host_len] = '\0';
+
+  if (*p == ':') {
+    p++;
+    char *end;
+    long pn = strtol(p, &end, 10);
+    if (end == p || pn <= 0 || pn > 65535) { free(*host); *host = NULL; free(*auth); *auth = NULL; return -1; }
+    *port = (uint16_t)pn;
+  }
+
+  return 0;
+}
+
+/* Build a CONNECT request for an HTTP proxy (RFC 7231 §4.3.6).
+ * host/port are the WS target; auth is base64 "user:pass" or NULL. */
+static int build_connect_request(char *buf, size_t size,
+                                 const char *host, uint16_t port,
+                                 const char *auth) {
+  int is_ipv6 = strchr(host, ':') != NULL;
+  const char *h = is_ipv6 ? "[" : "";
+  const char *hc = is_ipv6 ? "]" : "";
+  if (auth) {
+    return snprintf(buf, size,
+      "CONNECT %s%s%s:%u HTTP/1.1\r\n"
+      "Host: %s%s%s:%u\r\n"
+      "Proxy-Authorization: Basic %s\r\n"
+      "\r\n",
+      h, host, hc, port, h, host, hc, port, auth);
+  }
+  return snprintf(buf, size,
+    "CONNECT %s%s%s:%u HTTP/1.1\r\n"
+    "Host: %s%s%s:%u\r\n"
+    "\r\n",
+    h, host, hc, port, h, host, hc, port);
+}
+
+/* Look for a "200 Connection Established" response. Returns:
+ *   1 = complete 200 received (*header_len set), 0 = need more data,
+ *  -1 = non-200 / not an HTTP response. */
+static int parse_proxy_response(const char *buf, size_t len, size_t *header_len) {
+  if (len >= 4 && memcmp(buf, "HTTP", 4) != 0) return -1;
+  if (len >= 12 && memcmp(buf, "HTTP/1.1 101", 12) == 0) return -1; /* misrouted */
+
+  const char *end = NULL;
+  for (size_t i = 0; i + 4 <= len; i++) {
+    if (memcmp(buf + i, "\r\n\r\n", 4) == 0) { end = buf + i + 4; break; }
+  }
+  if (!end) return 0; /* headers not fully received yet */
+
+  if (len < 12 || memcmp(buf, "HTTP/1.1 200", 12) != 0) return -1;
+  *header_len = (size_t)(end - buf);
+  return 1;
+}
+
+/* Check whether `host` is exempted by NO_PROXY (comma-separated entries,
+ * entries may be "*", "host", "host:port", ".domain", "domain"). */
+static int no_proxy_match(const char *no_proxy, const char *host) {
+  size_t host_len = strlen(host);
+  const char *entry = no_proxy;
+  while (*entry) {
+    while (*entry == ',' || *entry == ' ' || *entry == '\t') entry++;
+    if (!*entry) break;
+    const char *start = entry;
+    while (*entry && *entry != ',' && *entry != ' ') entry++;
+    size_t e_len = (size_t)(entry - start);
+
+    /* strip optional ":port" suffix */
+    size_t port_at = e_len;
+    for (size_t i = 0; i < e_len; i++) {
+      if (start[i] == ':') { port_at = i; break; }
+    }
+    if (port_at == 0) continue;
+    if (port_at == 1 && start[0] == '*') return 1;
+
+    if (start[0] == '.') {
+      /* ".domain" or ".domain:port" matches host suffix */
+      const char *d = start + 1;
+      size_t d_len = port_at - 1;
+      if (host_len == d_len && strncasecmp(host, d, d_len) == 0) return 1;
+      if (host_len > d_len && strncasecmp(host + host_len - d_len, d, d_len) == 0 &&
+          host[host_len - d_len - 1] == '.') return 1;
+    } else {
+      if (host_len == port_at && strncasecmp(host, start, port_at) == 0) return 1;
+      /* bare "domain" also matches subdomains, like curl */
+      if (host_len > port_at && strncasecmp(host + host_len - port_at, start, port_at) == 0 &&
+          host[host_len - port_at - 1] == '.') return 1;
+    }
+    entry += (entry[0] == ' ' || entry[0] == '\t' || entry[0] == ',') ? 1 : 0;
+  }
+  return 0;
+}
+
+
+/* ================================================================== */
 /*  HTTP upgrade response parser                                        */
 /* ================================================================== */
 
@@ -589,6 +757,10 @@ static int frag_append(ws_t *ws, const unsigned char *data, size_t len) {
 /* ================================================================== */
 
 int ws_connect(ws_t **out, const char *url, ws_callbacks_t callbacks) {
+  return ws_connect_via_proxy(out, url, callbacks, NULL);
+}
+
+int ws_connect_via_proxy(ws_t **out, const char *url, ws_callbacks_t callbacks, const char *proxy) {
   if (!out || !url) return -1;
 
   ws_t *ws = (ws_t *)calloc(1, sizeof(ws_t));
@@ -603,8 +775,31 @@ int ws_connect(ws_t **out, const char *url, ws_callbacks_t callbacks) {
     return -1;
   }
 
+  /* Resolve the proxy: explicit argument wins; else read env
+   * HTTP_PROXY then ALL_PROXY, honouring NO_PROXY. */
+  const char *env_px = NULL;
+  if (proxy == NULL || *proxy == '\0') {
+    const char *np = getenv("NO_PROXY");
+    if (!np || !*np) np = getenv("no_proxy");
+    if (!np || !no_proxy_match(np, ws->host)) {
+      env_px = getenv("HTTP_PROXY");
+      if (!env_px || !*env_px) env_px = getenv("http_proxy");
+      if (!env_px || !*env_px) env_px = getenv("ALL_PROXY");
+      if (!env_px || !*env_px) env_px = getenv("all_proxy");
+      if (env_px && *env_px == '\0') env_px = NULL;
+    }
+    proxy = env_px;
+  }
+
+  if (proxy && *proxy) {
+    if (parse_proxy_url(proxy, &ws->proxy_host, &ws->proxy_port, &ws->proxy_auth) != 0) {
+      free(ws->host); free(ws->path); free(ws);
+      return -1;
+    }
+  }
+
   if (sock_init() != 0) {
-    free(ws->host); free(ws->path); free(ws);
+    free(ws->host); free(ws->path); free(ws->proxy_host); free(ws->proxy_auth); free(ws);
     return -1;
   }
 
@@ -727,6 +922,124 @@ static void ws_send_control(ws_t *ws, unsigned char opcode, const unsigned char 
   if (tmp) { sock_send_all(ws->fd, tmp, payload_len); free(tmp); }
 }
 
+/* Begin streaming a data frame whose payload is too large to fit in the
+ * fixed recv_buf. `p` points at the (complete) frame header in recv_buf,
+ * `header_len` bytes long; the bytes after it (up to recv_len) are the
+ * partial payload. That partial payload is unmasked (if needed) and copied
+ * into the dynamic frag buffer; the rest is appended by the OPEN-state
+ * streaming loop as it arrives. Protocol checks mirror the inline frame
+ * path so a violation is reported immediately. Returns 0 on success,
+ * -1 on protocol error (close frame + on_error already signalled). */
+static int ws_start_large_frame(ws_t *ws, const unsigned char *p, size_t header_len,
+                                uint64_t payload_len, int fin, unsigned char opcode, int masked) {
+  if (opcode >= 0x8) {
+    unsigned char fail[2] = {0x03, 0xea}; /* 1002 */
+    ws_send_control(ws, 0x88, fail, 2);
+    ws->state = WS_STATE_ERROR;
+    if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "control frame payload too large", ws->callbacks.userdata);
+    return -1;
+  }
+  if ((opcode >= 0x3 && opcode <= 0x7) || (opcode >= 0xb && opcode <= 0xf)) {
+    unsigned char fail[2] = {0x03, 0xea}; /* 1002 */
+    ws_send_control(ws, 0x88, fail, 2);
+    ws->state = WS_STATE_ERROR;
+    if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "reserved opcode", ws->callbacks.userdata);
+    return -1;
+  }
+  if (opcode == 0x0 && !ws->frag_active) {
+    ws->state = WS_STATE_ERROR;
+    if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "unexpected continuation frame", ws->callbacks.userdata);
+    return -1;
+  }
+  if (opcode != 0x0 && ws->frag_active) {
+    ws->state = WS_STATE_ERROR;
+    if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "expected continuation frame", ws->callbacks.userdata);
+    return -1;
+  }
+
+  ws->stream_active = 1;
+  ws->stream_fin = fin;
+  ws->stream_opcode = opcode;
+  ws->stream_payload_len = payload_len;
+  ws->stream_masked = masked;
+  if (masked) memcpy(ws->stream_mask, p + header_len - 4, 4);
+
+  if (opcode == 0x1 || opcode == 0x2) {
+    /* Data frame: start a fresh message in the frag buffer. */
+    ws->frag_len = 0;
+    if (!fin) {
+      ws->frag_active = 1;
+      ws->frag_binary = (opcode == 0x2);
+    }
+  }
+  /* opcode 0x0 (continuation): append to the existing fragmented message
+   * -- frag_len already holds the earlier fragments. */
+
+  /* Copy whatever payload bytes are already buffered after the header. */
+  size_t off = (size_t)(p - (const unsigned char *)ws->recv_buf) + header_len;
+  size_t avail = ws->recv_len > off ? ws->recv_len - off : 0;
+  const unsigned char *payload = p + header_len;
+  if (masked) {
+    unsigned char *q = (unsigned char *)payload;
+    for (size_t i = 0; i < avail; i++) q[i] ^= ws->stream_mask[i & 3];
+  }
+  if (avail > 0 && frag_append(ws, payload, avail) != 0) {
+    ws->state = WS_STATE_ERROR;
+    if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "out of memory reassembling large frame", ws->callbacks.userdata);
+    return -1;
+  }
+  ws->stream_payload_recvd = avail;
+  ws->stream_remaining = payload_len - avail;
+  return 0;
+}
+
+/* Process a fully-received large frame that was streamed into frag_buf.
+ * Behaves exactly like the inline frame path for the same opcode: text
+ * messages are UTF-8 validated, continuation frames finalize a fragmented
+ * message, and on_message fires when a complete message is assembled.
+ * Returns 1 if on_message fired, 0 otherwise, -1 on protocol error. */
+static int ws_finish_large_frame(ws_t *ws) {
+  unsigned char opcode = ws->stream_opcode;
+  if (opcode == 0x0) {
+    /* Continuation frame completing a fragmented message. */
+    if (ws->stream_fin) {
+      if (!ws->frag_binary && !ws_utf8_valid(ws->frag_buf, ws->frag_len)) {
+        unsigned char fail[2] = {0x03, 0xef}; /* 1007 */
+        ws_send_control(ws, 0x88, fail, 2);
+        ws->state = WS_STATE_ERROR;
+        if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "invalid UTF-8 in text message", ws->callbacks.userdata);
+        return -1;
+      }
+      if (ws->callbacks.on_message)
+        ws->callbacks.on_message(ws, (const char *)ws->frag_buf, ws->frag_len, ws->frag_binary, ws->callbacks.userdata);
+      ws->frag_active = 0;
+      ws->frag_len = 0;
+      return 1;
+    }
+    return 0;
+  }
+
+  /* Data frame (0x1 / 0x2). */
+  int binary = (opcode == 0x2);
+  if (ws->stream_fin) {
+    if (!binary && !ws_utf8_valid(ws->frag_buf, ws->frag_len)) {
+      unsigned char fail[2] = {0x03, 0xef}; /* 1007 */
+      ws_send_control(ws, 0x88, fail, 2);
+      ws->state = WS_STATE_ERROR;
+      if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "invalid UTF-8 in text message", ws->callbacks.userdata);
+      return -1;
+    }
+    if (ws->callbacks.on_message)
+      ws->callbacks.on_message(ws, (const char *)ws->frag_buf, ws->frag_len, binary, ws->callbacks.userdata);
+    ws->frag_active = 0;
+    ws->frag_len = 0;
+    return 1;
+  }
+  /* First fragment (frag_active/frag_binary already set) -- wait for the
+   * continuation frames. */
+  return 0;
+}
+
 ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
   if (!ws) return WS_EVENT_ERROR;
 
@@ -735,7 +1048,11 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
     /* ---- CONNECTING: initiate TCP connection ---- */
     case WS_STATE_CONNECTING: {
       if (ws->ai_list == NULL) {
-        if (sock_resolve(ws->host, ws->port, &ws->ai_list) != 0 || ws->ai_list == NULL) {
+        /* Through a proxy we connect to the proxy, not the WS target;
+         * the target is only used in the CONNECT request later. */
+        const char *res_host = ws->proxy_host ? ws->proxy_host : ws->host;
+        uint16_t res_port = ws->proxy_host ? ws->proxy_port : ws->port;
+        if (sock_resolve(res_host, res_port, &ws->ai_list) != 0 || ws->ai_list == NULL) {
           ws->state = WS_STATE_ERROR;
           if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "DNS resolve failed", ws->callbacks.userdata);
           return WS_EVENT_ERROR;
@@ -753,18 +1070,128 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 
         if (sock_connect_nonblock(s, ws->ai_cur->ai_addr, (socklen_t)ws->ai_cur->ai_addrlen) == 0) {
           ws->fd = s;
-          ws->state = WS_STATE_UPGRADING;
-          break; /* fall through to UPGRADING below */
+          ws->state = ws->proxy_host ? WS_STATE_PROXY_TUNNEL : WS_STATE_UPGRADING;
+          break; /* fall through to the matching state below */
         }
         sock_close(s); /* refused/unreachable — try next address */
         ws->ai_cur = ws->ai_cur->ai_next;
       }
 
-      if (ws->state != WS_STATE_UPGRADING) {
+      if (ws->state != WS_STATE_UPGRADING && ws->state != WS_STATE_PROXY_TUNNEL) {
         ws->state = WS_STATE_ERROR;
         if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "connect() failed for all addresses", ws->callbacks.userdata);
         return WS_EVENT_ERROR;
       }
+      WS_FALLTHROUGH;
+    }
+
+    /* ---- PROXY_TUNNEL: send CONNECT, wait for 200 from the proxy ---- */
+    case WS_STATE_PROXY_TUNNEL: {
+      if (ws->proxy_host && !ws->proxy_tunnel_sent) {
+        int rc = sock_poll_connect(ws->fd, timeout_ms);
+        if (rc < 0) {
+          /* TCP connect to the proxy failed. If the resolved list has
+           * more addresses, fall back to the next one. */
+          sock_close(ws->fd);
+          ws->fd = INVALID_SOCKET;
+          if (ws->ai_cur != NULL) ws->ai_cur = ws->ai_cur->ai_next;
+          if (ws->ai_cur != NULL) {
+            ws->state = WS_STATE_CONNECTING;
+            return WS_EVENT_NONE;
+          }
+          ws->state = WS_STATE_ERROR;
+          if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "TCP connect failed", ws->callbacks.userdata);
+          return WS_EVENT_ERROR;
+        }
+        if (rc == 0) return WS_EVENT_NONE; /* still connecting to proxy */
+
+        char req[512];
+        int reqlen = build_connect_request(req, sizeof(req), ws->host, ws->port, ws->proxy_auth);
+        if (reqlen <= 0 || (size_t)reqlen >= sizeof(req)) {
+          ws->state = WS_STATE_ERROR;
+          if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "CONNECT request too large for buffer", ws->callbacks.userdata);
+          return WS_EVENT_ERROR;
+        }
+        int sent = sock_send_all(ws->fd, req, (size_t)reqlen);
+        if (sent != reqlen) {
+          ws->state = WS_STATE_ERROR;
+          if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "failed to send CONNECT request", ws->callbacks.userdata);
+          return WS_EVENT_ERROR;
+        }
+        ws->proxy_tunnel_sent = 1;
+        /* Fall through to the response-waiting loop so one ws_poll()
+         * can complete the whole tunnel when the proxy replies fast. */
+      }
+
+      if (ws->proxy_host && !ws->proxy_tunnel_done) {
+        /* Internal loop, same rationale as the UPGRADING loop below:
+         * accumulate a possibly-fragmented proxy response and verify
+         * the 200 status line before moving on to the WS upgrade. */
+        int elapsed_ms = 0;
+        int poll_interval = 10;
+        for (;;) {
+          if (ws->recv_len >= WS_RECV_BUF_SIZE) {
+            ws->state = WS_STATE_ERROR;
+            if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "proxy response too large for buffer", ws->callbacks.userdata);
+            return WS_EVENT_ERROR;
+          }
+
+          fd_set rfds; FD_ZERO(&rfds); FD_SET(ws->fd, &rfds);
+          int wait_ms = (timeout_ms < 0) ? poll_interval
+                       : (timeout_ms - elapsed_ms < poll_interval) ? timeout_ms - elapsed_ms
+                       : poll_interval;
+          if (wait_ms <= 0) return WS_EVENT_NONE;
+
+          struct timeval tv = {wait_ms / 1000, (wait_ms % 1000) * 1000};
+          int sel = select((int)(ws->fd + 1), &rfds, NULL, NULL, &tv);
+          if (sel < 0) {
+            ws->state = WS_STATE_ERROR;
+            if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "select failed during proxy CONNECT", ws->callbacks.userdata);
+            return WS_EVENT_ERROR;
+          }
+          if (timeout_ms >= 0) elapsed_ms += wait_ms;
+          if (sel == 0) continue;
+
+          while (ws->recv_len < WS_RECV_BUF_SIZE) {
+            int n = sock_recv(ws->fd, ws->recv_buf + ws->recv_len, WS_RECV_BUF_SIZE - ws->recv_len);
+            if (n < 0) {
+              if (sock_would_block()) break;
+              ws->state = WS_STATE_ERROR;
+              if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "recv failed during proxy CONNECT", ws->callbacks.userdata);
+              return WS_EVENT_ERROR;
+            }
+            if (n == 0) {
+              ws->state = WS_STATE_CLOSED;
+              if (ws->callbacks.on_close) ws->callbacks.on_close(ws, 1006, "", 0, ws->callbacks.userdata);
+              return WS_EVENT_CLOSE;
+            }
+            ws->recv_len += (size_t)n;
+          }
+
+          size_t header_len = 0;
+          int pr = parse_proxy_response(ws->recv_buf, ws->recv_len, &header_len);
+          if (pr < 0) {
+            ws->state = WS_STATE_ERROR;
+            if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "proxy CONNECT failed (non-200)", ws->callbacks.userdata);
+            return WS_EVENT_ERROR;
+          }
+          if (pr == 1) {
+            ws->proxy_tunnel_done = 1;
+            /* Keep any bytes past the proxy header; the WS server may
+             * have already started its response through the tunnel. */
+            if (header_len < ws->recv_len) {
+              memmove(ws->recv_buf, ws->recv_buf + header_len, ws->recv_len - header_len);
+              ws->recv_len -= header_len;
+            } else {
+              ws->recv_len = 0;
+            }
+            break;
+          }
+          /* pr == 0: need more data, loop back to select() */
+        }
+      }
+
+      ws->state = WS_STATE_UPGRADING;
       WS_FALLTHROUGH;
     }
 
@@ -905,6 +1332,64 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 
     /* ---- OPEN: normal data exchange ---- */
     case WS_STATE_OPEN: {
+      /* If we're mid-stream of a large frame, keep reading its payload
+       * into the frag buffer before doing anything else. Control frames
+       * cannot be interleaved inside a single frame's payload (RFC 6455
+       * §5.4), so all bytes until the frame completes belong to it. */
+      if (ws->stream_active) {
+        fd_set rfds; FD_ZERO(&rfds); FD_SET(ws->fd, &rfds);
+        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+        int sel = select((int)(ws->fd + 1), &rfds, NULL, NULL, timeout_ms < 0 ? NULL : &tv);
+        if (sel < 0) {
+          ws->state = WS_STATE_ERROR;
+          if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "select failed during large frame", ws->callbacks.userdata);
+          return WS_EVENT_ERROR;
+        }
+        if (sel == 0) return WS_EVENT_NONE; /* still accumulating; nothing to report */
+
+        /* Drain the socket into the frag buffer (recv_buf doubles as the
+         * scratch space) until the frame completes or we'd block. */
+        while (ws->stream_remaining > 0) {
+          size_t want = ws->stream_remaining > WS_RECV_BUF_SIZE
+                            ? WS_RECV_BUF_SIZE
+                            : (size_t)ws->stream_remaining;
+          int n = sock_recv(ws->fd, ws->recv_buf, want);
+          if (n < 0) {
+            if (sock_would_block()) break;
+            ws->state = WS_STATE_ERROR;
+            if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "recv failed during large frame", ws->callbacks.userdata);
+            return WS_EVENT_ERROR;
+          }
+          if (n == 0) {
+            ws->state = WS_STATE_CLOSED;
+            if (ws->callbacks.on_close) ws->callbacks.on_close(ws, 1006, "", 0, ws->callbacks.userdata);
+            return WS_EVENT_CLOSE;
+          }
+          if (ws->stream_masked) {
+            for (int i = 0; i < n; i++)
+              ws->recv_buf[i] ^= ws->stream_mask[(ws->stream_payload_recvd + (unsigned)i) & 3];
+          }
+          if (frag_append(ws, (const unsigned char *)ws->recv_buf, (size_t)n) != 0) {
+            ws->state = WS_STATE_ERROR;
+            if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "out of memory reassembling large frame", ws->callbacks.userdata);
+            return WS_EVENT_ERROR;
+          }
+          ws->stream_payload_recvd += (uint64_t)n;
+          ws->stream_remaining -= (uint64_t)n;
+          if (n < (int)want) break; /* would-block -- come back next poll */
+        }
+
+        if (ws->stream_remaining > 0) return WS_EVENT_NONE;
+
+        int done = ws_finish_large_frame(ws);
+        if (done < 0) return WS_EVENT_ERROR;
+        ws->stream_active = 0;
+        if (done > 0) return WS_EVENT_MESSAGE;
+        /* First fragment of a fragmented message (or partial continuation):
+         * fall through so subsequent fragments/control frames are handled
+         * by the normal recv + parse path below. */
+      }
+
       if (ws->recv_len >= WS_RECV_BUF_SIZE) {
         /* Buffer is full and a previous pass still couldn't extract a
          * complete frame from it -- the message plainly doesn't fit
@@ -979,6 +1464,20 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
         }
 
         if (masked) header_len += 4;
+
+        /* A frame that can never fit in the fixed recv_buf: stream its
+         * payload into the dynamic frag buffer instead of erroring out
+         * when the buffer fills up. Only data frames (0x0/0x1/0x2) can
+         * be this large; anything else is a protocol violation caught
+         * by ws_start_large_frame(). */
+        if ((uint64_t)header_len + payload_len > WS_RECV_BUF_SIZE) {
+          if (ws->recv_len - consumed < header_len) break; /* header not complete yet */
+          if (ws_start_large_frame(ws, p, header_len, payload_len, fin, opcode, masked) != 0)
+            return WS_EVENT_ERROR;
+          consumed = ws->recv_len; /* header + partial payload consumed */
+          break;
+        }
+
         if (ws->recv_len - consumed < header_len + payload_len) break;
 
         unsigned char *payload = p + header_len;
@@ -1175,6 +1674,8 @@ void ws_destroy(ws_t *ws) {
   free(ws->host);
   free(ws->path);
   free(ws->frag_buf);
+  free(ws->proxy_host);
+  free(ws->proxy_auth);
   if (ws->ai_list) freeaddrinfo(ws->ai_list);
   free(ws);
   sock_cleanup();

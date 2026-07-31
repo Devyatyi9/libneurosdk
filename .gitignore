@@ -25,3 +25,4 @@ result
 autobahn-reports/*
 __pycache__/
 tests/interop/uWebSockets/
+tests/network/servers/proxy.log

@@ -12,6 +12,7 @@ extern "C" {
 typedef enum {
   WS_STATE_INIT,
   WS_STATE_CONNECTING,
+  WS_STATE_PROXY_TUNNEL,
   WS_STATE_UPGRADING,
   WS_STATE_OPEN,
   WS_STATE_CLOSING,
@@ -52,6 +53,14 @@ typedef struct {
  * url format: "ws://host:port/path"
  * Returns 0 on success (async), -1 on immediate error (bad URL). */
 int ws_connect(ws_t **out, const char *url, ws_callbacks_t callbacks);
+
+/* Connect via an HTTP CONNECT proxy. proxy may be:
+ *   "host:port"                       -- plain host
+ *   "http://host:port"                -- explicit scheme
+ *   "http://user:pass@host:port"      -- with credentials
+ * NULL or "" means: use env HTTP_PROXY/ALL_PROXY if set (subject to
+ * NO_PROXY), otherwise connect directly. Returns 0 on success. */
+int ws_connect_via_proxy(ws_t **out, const char *url, ws_callbacks_t callbacks, const char *proxy);
 
 /* Send a text frame. Returns 0 on success, -1 on error. */
 int ws_send(ws_t *ws, const char *data, size_t len);

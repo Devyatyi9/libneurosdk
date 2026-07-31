@@ -1,9 +1,8 @@
-"""TCP server that sends a WS frame exceeding the client's max payload buffer.
+"""TCP server that sends a WS frame exceeding the client's recv buffer.
 
-Tests #20: Max Payload Size — client must reject oversized frame
-(code 1009) rather than overflow the receive buffer.
-The client's recv buffer is WS_RECV_BUF_SIZE = 262144 bytes.
-We send a frame larger than that.
+Tests #20: the client streams frames larger than WS_RECV_BUF_SIZE
+(262144 bytes) instead of overflowing — Autobahn 9.x requires large
+payloads to be delivered whole.
 """
 import os, socket, struct, time, sys
 

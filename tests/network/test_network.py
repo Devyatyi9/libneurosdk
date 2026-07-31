@@ -44,8 +44,8 @@ def _wait_port(port, timeout=10):
     return False
 
 
-def _run_client(bin_path, url):
-    return subprocess.call([bin_path, url], env=build_env(bin_path))
+def _run_client(bin_path, url, *extra_args):
+    return subprocess.call([bin_path, url] + list(extra_args), env=build_env(bin_path))
 
 
 # ---- Sanity Checks (#5-#7) ----
@@ -248,7 +248,8 @@ def test_19_dns_failure():
 
 
 def test_20_oversize():
-    """#20: Oversize frame — server sends >262144 byte payload."""
+    """#20: Oversize frame — server sends a >262144 byte payload; the
+    client must stream it whole (Autobahn 9.x), not reject it."""
     port = 19112
     srv = _start_server("oversize_server.py", port)
     client_bin = _find_binary("test_oversize")
@@ -273,3 +274,86 @@ def test_21_dual_stack_fallback():
     rc = _run_client(echo_bin, f"ws://localhost:{port}/echo")
     srv.terminate(); srv.wait()
     assert rc == 0, f"dual-stack fallback failed (exit {rc})"
+
+
+def test_22_proxy_tunnel():
+    """#22: HTTP CONNECT proxy — client connects to a local echo server
+    through a minimal CONNECT proxy. The proxy must record the target
+    host:port it received in the CONNECT request."""
+    up_port = 19114
+    px_port = 19115
+    log = os.path.join(HERE, "servers", "proxy.log")
+    if os.path.exists(log):
+        os.unlink(log)
+
+    srv = subprocess.Popen([sys.executable, ECHO_SERVER, str(up_port)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert _wait_port(up_port), "echo_server.py did not start"
+
+    px = subprocess.Popen(
+        [sys.executable, os.path.join(SERVERS_DIR, "connect_proxy_server.py"),
+         str(px_port), log],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert _wait_port(px_port), "connect_proxy_server.py did not start"
+
+    try:
+        client_bin = _find_binary("proxy_test")
+        assert client_bin, "proxy_test binary not built"
+        rc = _run_client(client_bin, f"ws://127.0.0.1:{up_port}/",
+                         f"http://127.0.0.1:{px_port}")
+        assert rc == 0, f"proxy tunnel echo failed (exit {rc})"
+
+        with open(log) as f:
+            targets = f.read().strip().splitlines()
+        assert len(targets) >= 1, "proxy never received a CONNECT request"
+        assert targets[0] == f"127.0.0.1:{up_port}", \
+            f"unexpected CONNECT target: {targets[0]}"
+    finally:
+        px.terminate(); px.wait()
+        srv.terminate(); srv.wait()
+
+
+def test_23_proxy_env_no_proxy():
+    """#23: NO_PROXY bypass — HTTP_PROXY points at a dead port but the
+    target is excluded via NO_PROXY, so the connection must go direct."""
+    up_port = 19116
+    dead_port = 19117
+    srv = subprocess.Popen([sys.executable, ECHO_SERVER, str(up_port)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert _wait_port(up_port), "echo_server.py did not start"
+    try:
+        client_bin = _find_binary("echo_test")
+        assert client_bin, "echo_test binary not built"
+        env = build_env(client_bin)
+        env["HTTP_PROXY"] = f"http://127.0.0.1:{dead_port}"
+        env["NO_PROXY"] = f"127.0.0.1,localhost,::1"
+        rc = subprocess.call([client_bin, f"ws://127.0.0.1:{up_port}/"], env=env)
+        assert rc == 0, f"NO_PROXY bypass failed (exit {rc})"
+    finally:
+        srv.terminate(); srv.wait()
+
+
+def test_24_large_single_frame_text():
+    """#24: Single text frame with payload > 256 KiB recv buffer —
+    client must stream the frame across many reads (Autobahn 9.1)."""
+    port = 19118
+    size = 4 * 1024 * 1024  # 4 MiB
+    srv = _start_server("large_frame_server.py", port, str(size), "text")
+    client_bin = _find_binary("test_large_frame")
+    assert client_bin, "test_large_frame binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/", str(size), "text")
+    srv.terminate(); srv.wait()
+    assert rc == 0, f"large single text frame failed (exit {rc})"
+
+
+def test_25_large_single_frame_binary():
+    """#25: Single binary frame with payload of 16 MiB — largest Autobahn
+    single-frame size (9.2)."""
+    port = 19119
+    size = 16 * 1024 * 1024  # 16 MiB
+    srv = _start_server("large_frame_server.py", port, str(size), "binary")
+    client_bin = _find_binary("test_large_frame")
+    assert client_bin, "test_large_frame binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/", str(size), "binary")
+    srv.terminate(); srv.wait()
+    assert rc == 0, f"large single binary frame failed (exit {rc})"
