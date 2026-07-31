@@ -153,7 +153,7 @@ def main():
         upstream.terminate(); upstream.wait()
         return 1
 
-    # Debug: probe with real WS upgrade request
+    # Verify that nginx forwards a real WebSocket Upgrade to the upstream.
     def ws_probe(host, port, label):
         try:
             import base64
@@ -169,16 +169,21 @@ def main():
                 f"Sec-WebSocket-Key: {key}\r\n"
                 f"Sec-WebSocket-Version: 13\r\n\r\n"
             ).encode()
-            s.send(req)
+            s.sendall(req)
             resp = s.recv(4096)
-            status = resp[:resp.index(b"\r\n")].decode()
-            print(f"  {label}: {status}")
+            status = resp.split(b"\r\n", 1)[0].decode(errors="replace")
             s.close()
+            if not status.startswith("HTTP/1.1 101 "):
+                print(f"  {label} HTTP Upgrade: FAILED ({status})")
+                return False
+            print(f"  {label} HTTP Upgrade: {status}")
+            return True
         except Exception as e:
-            print(f"  {label}: probe failed: {e}")
+            print(f"  {label} HTTP Upgrade: FAILED ({e})")
+            return False
 
-    ws_probe("127.0.0.1", proxy_port, "nginx")
-    ws_probe("127.0.0.1", upstream_port, "upstream")
+    nginx_upgrade_ok = ws_probe("127.0.0.1", proxy_port, "nginx")
+    upstream_upgrade_ok = ws_probe("127.0.0.1", upstream_port, "upstream")
 
     # Also check nginx error log
     err_log = os.path.join(nginx_prefix, "logs", "error.log")
@@ -195,6 +200,10 @@ def main():
 
     nginx.terminate(); nginx.wait()
     upstream.terminate(); upstream.wait()
+
+    if not nginx_upgrade_ok or not upstream_upgrade_ok:
+        print("nginx proxy test FAILED (HTTP Upgrade did not return 101)")
+        return 1
 
     if rc != 0:
         print(f"nginx proxy test FAILED (exit={rc})")
