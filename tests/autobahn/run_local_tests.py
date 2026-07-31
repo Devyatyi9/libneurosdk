@@ -91,8 +91,11 @@ def load_reports(reports_dir):
         return None, []
     with open(index, encoding="utf-8") as f:
         reports = json.load(f).get(AGENT, {})
+    bad_behavior = ("FAILED", "NON-COMPLIANT", "UNSTABLE")
+    bad_close = ("FAILED", "WRONG CODE", "UNCLEAN")
     failures = [case for case, report in reports.items()
-                if report.get("behavior") in ("FAILED", "NON-COMPLIANT", "UNSTABLE")]
+                if report.get("behavior") in bad_behavior
+                or report.get("behaviorClose") in bad_close]
     return reports, failures
 
 DOCKER = ["docker"]

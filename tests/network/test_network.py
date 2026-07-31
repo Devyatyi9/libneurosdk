@@ -434,3 +434,15 @@ def test_31_fragmented_text_stream_echo():
                      str(size), "text", "echo")
     srv.terminate(); srv.wait()
     assert rc == 0, f"fragmented text stream echo failed (exit {rc})"
+
+
+def test_32_peer_initiated_clean_close():
+    """#32: Echo peer Close, then wait for the server to close TCP first."""
+    port = 19128
+    srv = _start_server("peer_close_server.py", port)
+    client_bin = _find_binary("test_peer_close")
+    assert client_bin, "test_peer_close binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
+    srv.wait(timeout=5)
+    assert srv.returncode == 0, f"peer-close server failed (exit {srv.returncode})"
+    assert rc == 0, f"peer-initiated clean close failed (exit {rc})"

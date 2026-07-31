@@ -15,9 +15,11 @@
     #pragma warning(push)
     #pragma warning(disable : 5105)
   #endif
+  /* clang-format off: winsock2.h must precede bcrypt.h on MSVC. */
   #include <winsock2.h>
   #include <ws2tcpip.h>
   #include <bcrypt.h>
+  /* clang-format on */
   #if defined(_MSC_VER)
     #pragma warning(pop)
   #endif
@@ -123,6 +125,9 @@ struct ws_t {
 
   /* Close handshake state */
   int closing_initiated;  /* non-zero if WE initiated the close */
+  uint16_t peer_close_code;
+  char peer_close_reason[123];
+  size_t peer_close_reason_len;
 };
 
 /* ================================================================== */
@@ -1404,6 +1409,7 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
       }
 
       int need_select = 1;
+      int peer_eof = 0;
       while (ws->recv_len < WS_RECV_BUF_SIZE) {
         if (need_select) {
           fd_set rfds; FD_ZERO(&rfds); FD_SET(ws->fd, &rfds);
@@ -1426,9 +1432,8 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
           return WS_EVENT_ERROR;
         }
         if (n == 0) {
-          ws->state = WS_STATE_CLOSED;
-          if (ws->callbacks.on_close) ws->callbacks.on_close(ws, 1006, "", 0, ws->callbacks.userdata);
-          return WS_EVENT_CLOSE;
+          peer_eof = 1;
+          break;
         }
         ws->recv_len += (size_t)n;
       }
@@ -1539,17 +1544,14 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
             if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "invalid close frame", ws->callbacks.userdata);
             return WS_EVENT_ERROR;
           }
-          /* Respond with echo of the received close code, or empty if none */
-          if (payload_len >= 2) {
-            unsigned char close_payload[2] = {(unsigned char)(code >> 8), (unsigned char)(code)};
-            ws_send_control(ws, 0x88, close_payload, 2);
-          } else {
-            ws_send_control(ws, 0x88, NULL, 0);
-          }
+          /* Echo the complete Close payload, including its optional reason. */
+          ws_send_control(ws, 0x88, payload, (size_t)payload_len);
           ws->state = WS_STATE_CLOSING;
           ws->closing_initiated = 0;
-          if (ws->callbacks.on_close) ws->callbacks.on_close(ws, code, reason, reason_len, ws->callbacks.userdata);
-          return WS_EVENT_CLOSE;
+          ws->peer_close_code = code;
+          ws->peer_close_reason_len = reason_len;
+          if (reason_len > 0) memcpy(ws->peer_close_reason, reason, reason_len);
+          return WS_EVENT_NONE;
         } else if (opcode == 0x9) {
           ws_send_control(ws, 0x8a, payload, (size_t)payload_len);
         } else if (opcode == 0xa) {
@@ -1627,14 +1629,28 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
         ws->recv_len = 0;
       }
 
+      if (peer_eof) {
+        ws->state = WS_STATE_CLOSED;
+        if (ws->callbacks.on_close) ws->callbacks.on_close(ws, 1006, "", 0, ws->callbacks.userdata);
+        return WS_EVENT_CLOSE;
+      }
+
       return delivered ? WS_EVENT_MESSAGE : WS_EVENT_NONE;
     }
 
     /* ---- CLOSING: wait for peer's Close frame, then close TCP ---- */
     case WS_STATE_CLOSING: {
       if (ws->fd == INVALID_SOCKET) { ws->state = WS_STATE_CLOSED; return WS_EVENT_CLOSE; }
-      /* If we initiated the close, wait a bit for the server's Close frame */
-      if (ws->closing_initiated) {
+      if (!ws->closing_initiated) {
+        fd_set rfds; FD_ZERO(&rfds); FD_SET(ws->fd, &rfds);
+        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+        int sel = select((int)(ws->fd + 1), &rfds, NULL, NULL,
+                         timeout_ms < 0 ? NULL : &tv);
+        if (sel == 0) return WS_EVENT_NONE;
+        int n = sock_recv(ws->fd, ws->recv_buf, WS_RECV_BUF_SIZE);
+        if (n > 0 || (n < 0 && sock_would_block())) return WS_EVENT_NONE;
+      } else {
+        /* If we initiated the close, wait a bit for the server's Close frame */
         int n = sock_recv(ws->fd, ws->recv_buf, WS_RECV_BUF_SIZE);
         if (n > 0) {
           /* Got some data — might be a Close frame, but we don't care at this point */
@@ -1646,7 +1662,9 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
       ws->fd = INVALID_SOCKET;
       ws->state = WS_STATE_CLOSED;
       if (!ws->closing_initiated) {
-        /* Server initiated: on_close already called when we received the Close frame */
+        if (ws->callbacks.on_close)
+          ws->callbacks.on_close(ws, ws->peer_close_code, ws->peer_close_reason,
+                                 ws->peer_close_reason_len, ws->callbacks.userdata);
       } else if (ws->callbacks.on_close) {
         ws->callbacks.on_close(ws, 1000, "", 0, ws->callbacks.userdata);
       }

@@ -189,7 +189,9 @@ jobs:
         if len(c) != expected:
             print(f'Expected {expected} reports, found {len(c)}')
             sys.exit(1)
-        f = [k for k, v in c.items() if v.get('behavior') in ('FAILED', 'NON-COMPLIANT', 'UNSTABLE')]
+        bad_behavior = ('FAILED', 'NON-COMPLIANT', 'UNSTABLE')
+        bad_close = ('FAILED', 'WRONG CODE', 'UNCLEAN')
+        f = [k for k, v in c.items() if v.get('behavior') in bad_behavior or v.get('behaviorClose') in bad_close]
         if f:
             print(f'Retrying {len(f)} failed report cases once: {f}')
             for case_id in f:
@@ -199,7 +201,7 @@ jobs:
                 pass
             d = json.load(open(p))
             c = d[list(d.keys())[0]]
-            f = [k for k, v in c.items() if v.get('behavior') in ('FAILED', 'NON-COMPLIANT', 'UNSTABLE')]
+            f = [k for k, v in c.items() if v.get('behavior') in bad_behavior or v.get('behaviorClose') in bad_close]
         if f:
             print(f'{len(f)} failures: {f}')
             sys.exit(1)
