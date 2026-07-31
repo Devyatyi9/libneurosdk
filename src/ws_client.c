@@ -36,6 +36,7 @@
   #include <signal.h>
   #include <arpa/inet.h>
   #include <netinet/in.h>
+  #include <netinet/tcp.h>
   #if defined(__linux__)
     #include <sys/random.h>
   #endif
@@ -846,42 +847,31 @@ static size_t ws_build_frame_header(unsigned char *header, unsigned char opcode,
   return hlen;
 }
 
-int ws_send(ws_t *ws, const char *data, size_t len) {
+static int ws_send_data_frame(ws_t *ws, unsigned char opcode, const char *data, size_t len) {
   if (!ws || ws->state != WS_STATE_OPEN) return -1;
-  unsigned char header[10];
-  size_t hlen = ws_build_frame_header(header, 0x1, 1, len); /* text */
+  if (len > SIZE_MAX - 14) return -1;
+
+  unsigned char *frame = (unsigned char *)malloc(14 + len);
+  if (!frame) return -1;
+  size_t hlen = ws_build_frame_header(frame, opcode, 1, len);
 
   unsigned char mask[4];
   ws_random_bytes(mask, 4);
+  memcpy(frame + hlen, mask, sizeof(mask));
+  ws_apply_mask((const unsigned char *)data, len, mask, frame + hlen + sizeof(mask));
 
-  if (sock_send_all(ws->fd, header, hlen) != (int)hlen) return -1;
-  if (sock_send_all(ws->fd, mask, 4) != 4) return -1;
+  size_t frame_len = hlen + sizeof(mask) + len;
+  int rc = sock_send_all(ws->fd, frame, frame_len);
+  free(frame);
+  return rc == (int)frame_len ? 0 : -1;
+}
 
-  unsigned char *masked = (unsigned char *)malloc(len);
-  if (!masked) return -1;
-  ws_apply_mask((const unsigned char *)data, len, mask, masked);
-  int rc = sock_send_all(ws->fd, masked, len);
-  free(masked);
-  return (rc == (int)len) ? 0 : -1;
+int ws_send(ws_t *ws, const char *data, size_t len) {
+  return ws_send_data_frame(ws, 0x1, data, len);
 }
 
 int ws_send_binary(ws_t *ws, const char *data, size_t len) {
-  if (!ws || ws->state != WS_STATE_OPEN) return -1;
-  unsigned char header[10];
-  size_t hlen = ws_build_frame_header(header, 0x2, 1, len); /* binary */
-
-  unsigned char mask[4];
-  ws_random_bytes(mask, 4);
-
-  if (sock_send_all(ws->fd, header, hlen) != (int)hlen) return -1;
-  if (sock_send_all(ws->fd, mask, 4) != 4) return -1;
-
-  unsigned char *masked = (unsigned char *)malloc(len);
-  if (!masked) return -1;
-  ws_apply_mask((const unsigned char *)data, len, mask, masked);
-  int rc = sock_send_all(ws->fd, masked, len);
-  free(masked);
-  return (rc == (int)len) ? 0 : -1;
+  return ws_send_data_frame(ws, 0x2, data, len);
 }
 
 static int ws_utf8_valid(const unsigned char *s, size_t len) {
@@ -912,22 +902,14 @@ static int ws_utf8_valid(const unsigned char *s, size_t len) {
 /* Helper to build a masked Close or Pong response and send it.
  * Called when we need to reply to a received control frame. */
 static void ws_send_control(ws_t *ws, unsigned char opcode, const unsigned char *payload, size_t payload_len) {
-  unsigned char hdr[4] = {opcode, 0x80};
+  unsigned char frame[131] = {opcode, 0x80};
   unsigned char mask[4];
-  unsigned char *tmp = NULL;
-  size_t hlen = 2;
   if (payload_len > 125) payload_len = 125;
-  hdr[1] |= (unsigned char)payload_len;
+  frame[1] |= (unsigned char)payload_len;
   ws_random_bytes(mask, 4);
-  if (payload_len > 0) {
-    tmp = (unsigned char *)malloc(payload_len);
-    if (tmp) {
-      for (size_t i = 0; i < payload_len; i++) tmp[i] = payload[i] ^ mask[i & 3];
-    }
-  }
-  sock_send_all(ws->fd, hdr, hlen);
-  sock_send_all(ws->fd, mask, 4);
-  if (tmp) { sock_send_all(ws->fd, tmp, payload_len); free(tmp); }
+  memcpy(frame + 2, mask, sizeof(mask));
+  ws_apply_mask(payload, payload_len, mask, frame + 6);
+  sock_send_all(ws->fd, frame, 6 + payload_len);
 }
 
 /* Begin streaming a data frame whose payload is too large to fit in the
@@ -1083,6 +1065,8 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
       while (ws->ai_cur != NULL) {
         SOCKET s = sock_create(ws->ai_cur->ai_family);
         if (s == INVALID_SOCKET) { ws->ai_cur = ws->ai_cur->ai_next; continue; }
+        int no_delay = 1;
+        setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char *)&no_delay, sizeof(no_delay));
         sock_set_nonblock(s);
 
         if (sock_connect_nonblock(s, ws->ai_cur->ai_addr, (socklen_t)ws->ai_cur->ai_addrlen) == 0) {

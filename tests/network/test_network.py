@@ -368,3 +368,69 @@ def test_26_invalid_64bit_payload_length():
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     srv.terminate(); srv.wait()
     assert rc != 0, "invalid 64-bit payload length was accepted"
+
+
+def test_27_large_fragmented_text_echo():
+    """#27: Reassemble and echo 4 MiB text split into 64-byte frames."""
+    port = 19123
+    size = 4 * 1024 * 1024
+    srv = _start_server("fragmented_large_frame_server.py", port,
+                        str(size), "text", "64")
+    client_bin = _find_binary("test_large_frame")
+    assert client_bin, "test_large_frame binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     str(size), "text", "echo")
+    srv.terminate(); srv.wait()
+    assert rc == 0, f"large fragmented text echo failed (exit {rc})"
+
+
+def test_28_large_fragmented_binary_echo():
+    """#28: Reassemble and echo 4 MiB binary split into 1 MiB frames."""
+    port = 19124
+    size = 4 * 1024 * 1024
+    srv = _start_server("fragmented_large_frame_server.py", port,
+                        str(size), "binary", str(1024 * 1024))
+    client_bin = _find_binary("test_large_frame")
+    assert client_bin, "test_large_frame binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     str(size), "binary", "echo")
+    srv.terminate(); srv.wait()
+    assert rc == 0, f"large fragmented binary echo failed (exit {rc})"
+
+
+def test_29_text_rtt_echo():
+    """#29: Echo 1000 sequential 4096-byte text messages (Autobahn 9.7)."""
+    port = 19125
+    srv = _start_server("rtt_echo_server.py", port, "1000", "4096", "text")
+    client_bin = _find_binary("test_large_frame")
+    assert client_bin, "test_large_frame binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     "4096", "text", "echo")
+    srv.terminate(); srv.wait()
+    assert rc == 0, f"text RTT echo failed (exit {rc})"
+
+
+def test_30_empty_binary_rtt_echo():
+    """#30: Echo 1000 sequential empty binary messages (Autobahn 9.8)."""
+    port = 19126
+    srv = _start_server("rtt_echo_server.py", port, "1000", "0", "binary")
+    client_bin = _find_binary("test_large_frame")
+    assert client_bin, "test_large_frame binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     "0", "binary", "echo")
+    srv.terminate(); srv.wait()
+    assert rc == 0, f"empty binary RTT echo failed (exit {rc})"
+
+
+def test_31_fragmented_text_stream_echo():
+    """#31: One text message streamed as 4 KiB frames for about 3 seconds."""
+    port = 19127
+    size = 3 * 1024 * 1024
+    srv = _start_server("fragmented_large_frame_server.py", port,
+                        str(size), "text", "4096", "0.004")
+    client_bin = _find_binary("test_large_frame")
+    assert client_bin, "test_large_frame binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     str(size), "text", "echo")
+    srv.terminate(); srv.wait()
+    assert rc == 0, f"fragmented text stream echo failed (exit {rc})"

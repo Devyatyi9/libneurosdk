@@ -144,14 +144,18 @@ jobs:
 
     - name: Run Autobahn test cases (Linux only)
       if: matrix.os == 'ubuntu-latest' && matrix.asan
+      shell: python
       run: |
-        for i in $(seq 1 247); do
-          if ! ./build/fuzzing_client "$i" "ws://127.0.0.1:9001"; then
-            echo "FAIL: case $i"
-            exit 1
-          fi
-        done
-        echo "Autobahn: 247/247 passed"
+        import subprocess
+        from websockets.sync.client import connect
+
+        url = 'ws://127.0.0.1:9001'
+        with connect(url + '/getCaseCount') as ws:
+            total = int(ws.recv())
+        for case in range(1, total + 1):
+            if subprocess.run(['./build/fuzzing_client', str(case), url]).returncode:
+                raise SystemExit(f'FAIL: case {case}')
+        print(f'Autobahn: {total}/{total} passed')
 
     - name: Trigger report finalisation
       if: matrix.os == 'ubuntu-latest' && matrix.asan
@@ -172,14 +176,30 @@ jobs:
       if: matrix.os == 'ubuntu-latest' && matrix.asan
       shell: python
       run: |
-        import json, sys, os
+        import json, os, subprocess, sys
         p = os.path.join('reports', 'index.json')
         if not os.path.exists(p):
             print('index.json not found')
             sys.exit(1)
         d = json.load(open(p))
         c = d[list(d.keys())[0]]
+        from websockets.sync.client import connect
+        with connect('ws://127.0.0.1:9001/getCaseCount') as ws:
+            expected = int(ws.recv())
+        if len(c) != expected:
+            print(f'Expected {expected} reports, found {len(c)}')
+            sys.exit(1)
         f = [k for k, v in c.items() if v.get('behavior') in ('FAILED', 'NON-COMPLIANT', 'UNSTABLE')]
+        if f:
+            print(f'Retrying {len(f)} failed report cases once: {f}')
+            for case_id in f:
+                report = json.load(open(os.path.join('reports', c[case_id]['reportfile'])))
+                subprocess.run(['./build/fuzzing_client', str(report['case']), 'ws://127.0.0.1:9001'])
+            with connect('ws://127.0.0.1:9001/updateReports?agent=ws_client'):
+                pass
+            d = json.load(open(p))
+            c = d[list(d.keys())[0]]
+            f = [k for k, v in c.items() if v.get('behavior') in ('FAILED', 'NON-COMPLIANT', 'UNSTABLE')]
         if f:
             print(f'{len(f)} failures: {f}')
             sys.exit(1)

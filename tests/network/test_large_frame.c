@@ -18,15 +18,25 @@
 #include <windows.h>
 #pragma warning(pop)
 #define SLEEP_MS(x) Sleep(x)
+static uint64_t now_ms(void) { return (uint64_t)GetTickCount64(); }
 #else
 #include <unistd.h>
+#include <time.h>
 #define SLEEP_MS(x) usleep((x) * 1000)
+static uint64_t now_ms(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
 #endif
 
 static int connected = 0;
 static int got_message = 0;
 static int got_close = 0;
 static int got_error = 0;
+static int close_code = 0;
+static int echo_mode = 0;
+static int echo_sent = 0;
 
 static size_t recv_len = 0;
 static size_t expected_len = 0;
@@ -51,11 +61,22 @@ static void on_message(ws_t *ws, const char *data, size_t len, int binary, void 
   for (size_t i = 0; content_ok && i < len; i++) {
     if (payload[i] != expect) content_ok = 0;
   }
+
+  if (echo_mode && type_ok && content_ok) {
+    int rc = binary ? ws_send_binary(ws, data, len) : ws_send(ws, data, len);
+    if (rc == 0) {
+      echo_sent = 1;
+    } else {
+      fprintf(stderr, "[fail] failed to echo large message\n");
+      got_error = 1;
+    }
+  }
 }
 
 static void on_close(ws_t *ws, uint16_t code, const char *reason, size_t reason_len, void *userdata) {
   (void)ws; (void)userdata;
   printf("[close] code=%u reason=%.*s\n", code, (int)reason_len, reason);
+  close_code = code;
   got_close = 1;
 }
 
@@ -67,12 +88,13 @@ static void on_error(ws_t *ws, const char *msg, void *userdata) {
 
 int main(int argc, char *argv[]) {
   if (argc < 3) {
-    fprintf(stderr, "Usage: %s <url> <expected_len> [text|binary]\n", argv[0]);
+    fprintf(stderr, "Usage: %s <url> <expected_len> [text|binary] [echo]\n", argv[0]);
     return 1;
   }
   const char *url = argv[1];
   expected_len = (size_t)strtoull(argv[2], NULL, 10);
   if (argc > 3 && strcmp(argv[3], "binary") == 0) expected_binary = 1;
+  if (argc > 4 && strcmp(argv[4], "echo") == 0) echo_mode = 1;
 
   ws_callbacks_t callbacks = { on_open, on_message, on_close, on_error, NULL };
   ws_t *ws = NULL;
@@ -83,8 +105,8 @@ int main(int argc, char *argv[]) {
   printf("[info] Connecting to %s, expecting %zu-byte %s message ...\n",
          url, expected_len, expected_binary ? "binary" : "text");
 
-  int timeout = 300; /* 100ms per poll, 30s total */
-  while (!got_message && !got_close && !got_error && timeout-- > 0)
+  uint64_t deadline = now_ms() + 30000;
+  while (!(echo_mode ? got_close : got_message) && !got_error && now_ms() < deadline)
     ws_poll(ws, 100);
 
   int fail = 0;
@@ -106,12 +128,18 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "[fail] content mismatch (expected byte 0x%02X)\n",
             expected_binary ? 0xAA : (unsigned char)'A');
     fail = 1;
+  } else if (echo_mode && !echo_sent) {
+    fprintf(stderr, "[fail] large message was not echoed\n");
+    fail = 1;
+  } else if (echo_mode && (!got_close || close_code != 1000)) {
+    fprintf(stderr, "[fail] server did not confirm echoed message with close 1000\n");
+    fail = 1;
   } else {
     printf("[pass] received %zu-byte large %s frame\n", recv_len,
            expected_binary ? "binary" : "text");
   }
 
-  ws_close(ws);
+  if (ws_state(ws) == WS_STATE_OPEN) ws_close(ws);
   for (int i = 0; i < 10 && ws_state(ws) == WS_STATE_CLOSING; i++)
     ws_poll(ws, 100);
   ws_destroy(ws);
