@@ -42,18 +42,28 @@ int main(void) {
 
     test("missing ws:// prefix",
         parse_url("http://localhost/", &host, &port, &path) != 0);
+    test("host NULL after prefix error", host == NULL);
+    test("path NULL after prefix error", path == NULL);
 
     test("empty host",
         parse_url("ws:///path", &host, &port, &path) != 0);
+    test("host NULL after empty host", host == NULL);
+    test("path NULL after empty host", path == NULL);
 
     test("port zero",
         parse_url("ws://host:0/path", &host, &port, &path) != 0);
+    test("host NULL after port zero", host == NULL);
+    test("path NULL after port zero", path == NULL);
 
     test("port too large",
         parse_url("ws://host:99999/path", &host, &port, &path) != 0);
+    test("host NULL after port too large", host == NULL);
+    test("path NULL after port too large", path == NULL);
 
     test("port negative",
         parse_url("ws://host:-1/path", &host, &port, &path) != 0);
+    test("host NULL after port negative", host == NULL);
+    test("path NULL after port negative", path == NULL);
 
     test("long host",
         parse_url("ws://0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789:8080/x", &host, &port, &path) == 0 &&

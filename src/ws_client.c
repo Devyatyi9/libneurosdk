@@ -275,6 +275,8 @@ static void ws_random_bytes(unsigned char *buf, size_t len) {
 /*  URL parsing (minimal, only ws://)                                  */
 /* ================================================================== */
 static int parse_url(const char *url, char **host, uint16_t *port, char **path) {
+  *host = NULL;
+  *path = NULL;
   /* Expect: ws://host[:port][/path] */
   if (strncmp(url, "ws://", 5) != 0) return -1;
   const char *p = url + 5;
@@ -292,7 +294,7 @@ static int parse_url(const char *url, char **host, uint16_t *port, char **path) 
     p++;
     char *end;
     long pn = strtol(p, &end, 10);
-    if (end == p || pn <= 0 || pn > 65535) { free(*host); return -1; }
+    if (end == p || pn <= 0 || pn > 65535) { free(*host); *host = NULL; return -1; }
     *port = (uint16_t)pn;
     p = end;
   } else {
@@ -301,10 +303,10 @@ static int parse_url(const char *url, char **host, uint16_t *port, char **path) 
 
   if (*p == '/') {
     *path = strdup(p);
-    if (!*path) { free(*host); return -1; }
+    if (!*path) { free(*host); *host = NULL; return -1; }
   } else {
     *path = strdup("/");
-    if (!*path) { free(*host); return -1; }
+    if (!*path) { free(*host); *host = NULL; return -1; }
   }
 
   return 0;
@@ -580,11 +582,18 @@ int ws_connect(ws_t **out, const char *url, ws_callbacks_t callbacks) {
   return 0;
 }
 
-int ws_send(ws_t *ws, const char *data, size_t len) {
-  if (!ws || ws->state != WS_STATE_OPEN) return -1;
-  unsigned char header[10];
+/* Apply RFC 6455 client masking: masked[i] = data[i] ^ mask[i & 3]. */
+static void ws_apply_mask(const unsigned char *data, size_t len,
+                          const unsigned char mask[4], unsigned char *out) {
+  for (size_t i = 0; i < len; i++) out[i] = (unsigned char)data[i] ^ mask[i & 3];
+}
+
+/* Build a WS frame header: FIN + opcode + length, with the MASK bit set.
+ * Returns header length (2, 4 or 10). */
+static size_t ws_build_frame_header(unsigned char *header, unsigned char opcode,
+                                    int fin, size_t len) {
   size_t hlen = 2;
-  header[0] = 0x81; /* FIN + text opcode */
+  header[0] = (fin ? 0x80 : 0x00) | (opcode & 0x0f);
   header[1] = 0x80; /* MASK bit set */
   if (len < 126) {
     header[1] |= (unsigned char)len;
@@ -600,6 +609,13 @@ int ws_send(ws_t *ws, const char *data, size_t len) {
       header[hlen + i] = (unsigned char)(n >> (56 - i * 8));
     hlen = 10;
   }
+  return hlen;
+}
+
+int ws_send(ws_t *ws, const char *data, size_t len) {
+  if (!ws || ws->state != WS_STATE_OPEN) return -1;
+  unsigned char header[10];
+  size_t hlen = ws_build_frame_header(header, 0x1, 1, len); /* text */
 
   unsigned char mask[4];
   ws_random_bytes(mask, 4);
@@ -609,7 +625,7 @@ int ws_send(ws_t *ws, const char *data, size_t len) {
 
   unsigned char *masked = (unsigned char *)malloc(len);
   if (!masked) return -1;
-  for (size_t i = 0; i < len; i++) masked[i] = (unsigned char)data[i] ^ mask[i & 3];
+  ws_apply_mask((const unsigned char *)data, len, mask, masked);
   int rc = sock_send_all(ws->fd, masked, len);
   free(masked);
   return (rc == (int)len) ? 0 : -1;
@@ -618,23 +634,7 @@ int ws_send(ws_t *ws, const char *data, size_t len) {
 int ws_send_binary(ws_t *ws, const char *data, size_t len) {
   if (!ws || ws->state != WS_STATE_OPEN) return -1;
   unsigned char header[10];
-  size_t hlen = 2;
-  header[0] = 0x82;
-  header[1] = 0x80;
-  if (len < 126) {
-    header[1] |= (unsigned char)len;
-  } else if (len < 65536) {
-    header[1] |= 126;
-    header[2] = (unsigned char)(len >> 8);
-    header[3] = (unsigned char)(len);
-    hlen = 4;
-  } else {
-    header[1] |= 127;
-    uint64_t n = (uint64_t)len;
-    for (int i = 0; i < 8; i++)
-      header[hlen + i] = (unsigned char)(n >> (56 - i * 8));
-    hlen = 10;
-  }
+  size_t hlen = ws_build_frame_header(header, 0x2, 1, len); /* binary */
 
   unsigned char mask[4];
   ws_random_bytes(mask, 4);
@@ -644,7 +644,7 @@ int ws_send_binary(ws_t *ws, const char *data, size_t len) {
 
   unsigned char *masked = (unsigned char *)malloc(len);
   if (!masked) return -1;
-  for (size_t i = 0; i < len; i++) masked[i] = (unsigned char)data[i] ^ mask[i & 3];
+  ws_apply_mask((const unsigned char *)data, len, mask, masked);
   int rc = sock_send_all(ws->fd, masked, len);
   free(masked);
   return (rc == (int)len) ? 0 : -1;
