@@ -81,6 +81,11 @@ struct ws_t {
   uint16_t port;
   char *path;
 
+  /* Resolved address list (getaddrinfo, AF_UNSPEC) + current attempt.
+   * Freed via freeaddrinfo() when the connection opens or is destroyed. */
+  struct addrinfo *ai_list;
+  struct addrinfo *ai_cur;
+
   /* Upgrade response state */
   int upgrade_done;
   char key[64];  /* Sec-WebSocket-Key sent during upgrade */
@@ -120,8 +125,8 @@ static int sock_init(void) { return 0; }
 static void sock_cleanup(void) {}
 #endif
 
-static SOCKET sock_create(void) {
-  SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+static SOCKET sock_create(int family) {
+  SOCKET s = socket(family, SOCK_STREAM, 0);
   if (s == INVALID_SOCKET) return INVALID_SOCKET;
   /* Allow reusing local ports still in TIME_WAIT — critical on Windows
    * when many connect/close cycles exhaust the ephemeral port range.
@@ -241,17 +246,17 @@ static int sock_send_all(SOCKET s, const void *buf, size_t len) {
   return (int)sent;
 }
 
-static int sock_resolve(const char *host, uint16_t port, struct sockaddr_in *out) {
-  struct addrinfo hints, *res;
+/* Resolve host+port into an addrinfo list (AF_UNSPEC → IPv4 and/or
+ * IPv6).  Returns 0 on success (res != NULL), -1 on failure. */
+static int sock_resolve(const char *host, uint16_t port, struct addrinfo **out) {
+  struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_INET;
+  hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   char port_str[8];
   snprintf(port_str, sizeof(port_str), "%u", port);
-  int rc = getaddrinfo(host, port_str, &hints, &res);
-  if (rc != 0 || res == NULL) return -1;
-  *out = *(struct sockaddr_in *)res->ai_addr;
-  freeaddrinfo(res);
+  int rc = getaddrinfo(host, port_str, &hints, out);
+  if (rc != 0 || *out == NULL) return -1;
   return 0;
 }
 
@@ -277,12 +282,25 @@ static void ws_random_bytes(unsigned char *buf, size_t len) {
 static int parse_url(const char *url, char **host, uint16_t *port, char **path) {
   *host = NULL;
   *path = NULL;
-  /* Expect: ws://host[:port][/path] */
+  /* Expect: ws://host[:port][/path] or ws://[v6addr][:port][/path] */
   if (strncmp(url, "ws://", 5) != 0) return -1;
   const char *p = url + 5;
-  const char *host_start = p;
-  while (*p && *p != ':' && *p != '/') p++;
-  size_t host_len = (size_t)(p - host_start);
+  const char *host_start;
+  size_t host_len;
+
+  if (*p == '[') {
+    /* Bracketed IPv6 literal: [::1][:port][/path] */
+    p++;
+    host_start = p;
+    while (*p && *p != ']') p++;
+    if (*p != ']') return -1; /* unterminated '[' */
+    host_len = (size_t)(p - host_start);
+    p++; /* consume ']' */
+  } else {
+    host_start = p;
+    while (*p && *p != ':' && *p != '/') p++;
+    host_len = (size_t)(p - host_start);
+  }
   if (host_len == 0) return -1;
 
   *host = (char *)malloc(host_len + 1);
@@ -324,16 +342,20 @@ static int build_upgrade_request(char *buf, size_t size,
                                   const char *host, uint16_t port,
                                   const char *path,
                                   const char *key) {
+  /* RFC 3986 §3.2.2: IPv6 literals in the Host header MUST be bracketed.
+   * A colon in the host means it's a literal v6 address (hostnames can't
+   * contain ':'). */
+  int is_ipv6 = strchr(host, ':') != NULL;
   return snprintf(buf, size,
     "GET %s HTTP/1.1\r\n"
-    "Host: %s:%u\r\n"
+    "Host: %s%s%s:%u\r\n"
     "Upgrade: websocket\r\n"
     "Connection: Upgrade\r\n"
     "Sec-WebSocket-Version: 13\r\n"
     "Sec-WebSocket-Key: %s\r\n"
     "Origin: http://local.neuro-integration\r\n"
     "\r\n",
-    path, host, port, key);
+    path, is_ipv6 ? "[" : "", host, is_ipv6 ? "]" : "", port, key);
 }
 
 static int generate_key(char *out, size_t size) {
@@ -703,30 +725,37 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 
     /* ---- CONNECTING: initiate TCP connection ---- */
     case WS_STATE_CONNECTING: {
-      struct sockaddr_in addr;
-      if (sock_resolve(ws->host, ws->port, &addr) != 0) {
-        ws->state = WS_STATE_ERROR;
-        if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "DNS resolve failed", ws->callbacks.userdata);
-        return WS_EVENT_ERROR;
+      if (ws->ai_list == NULL) {
+        if (sock_resolve(ws->host, ws->port, &ws->ai_list) != 0 || ws->ai_list == NULL) {
+          ws->state = WS_STATE_ERROR;
+          if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "DNS resolve failed", ws->callbacks.userdata);
+          return WS_EVENT_ERROR;
+        }
+        ws->ai_cur = ws->ai_list;
       }
 
-      SOCKET s = sock_create();
-      if (s == INVALID_SOCKET) {
+      /* Try addresses in order until one accepts a non-blocking connect.
+       * getaddrinfo returns v6 and v4 interleaved; a v6 address whose
+       * network is down must not prevent falling back to v4. */
+      while (ws->ai_cur != NULL) {
+        SOCKET s = sock_create(ws->ai_cur->ai_family);
+        if (s == INVALID_SOCKET) { ws->ai_cur = ws->ai_cur->ai_next; continue; }
+        sock_set_nonblock(s);
+
+        if (sock_connect_nonblock(s, ws->ai_cur->ai_addr, (socklen_t)ws->ai_cur->ai_addrlen) == 0) {
+          ws->fd = s;
+          ws->state = WS_STATE_UPGRADING;
+          break; /* fall through to UPGRADING below */
+        }
+        sock_close(s); /* refused/unreachable — try next address */
+        ws->ai_cur = ws->ai_cur->ai_next;
+      }
+
+      if (ws->state != WS_STATE_UPGRADING) {
         ws->state = WS_STATE_ERROR;
-        if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "socket() failed", ws->callbacks.userdata);
+        if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "connect() failed for all addresses", ws->callbacks.userdata);
         return WS_EVENT_ERROR;
       }
-      sock_set_nonblock(s);
-
-      if (sock_connect_nonblock(s, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        sock_close(s);
-        ws->state = WS_STATE_ERROR;
-        if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "connect() failed", ws->callbacks.userdata);
-        return WS_EVENT_ERROR;
-      }
-
-      ws->fd = s;
-      ws->state = WS_STATE_UPGRADING;
       WS_FALLTHROUGH;
     }
 
@@ -735,6 +764,16 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
       if (!ws->upgrade_done) {
         int rc = sock_poll_connect(ws->fd, timeout_ms);
         if (rc < 0) {
+          /* TCP connect failed (e.g. SO_ERROR after a v6 connect that
+           * didn't complete). If the resolved list has more addresses,
+           * fall back to the next one instead of giving up. */
+          sock_close(ws->fd);
+          ws->fd = INVALID_SOCKET;
+          if (ws->ai_cur != NULL) ws->ai_cur = ws->ai_cur->ai_next;
+          if (ws->ai_cur != NULL) {
+            ws->state = WS_STATE_CONNECTING;
+            return WS_EVENT_NONE;
+          }
           ws->state = WS_STATE_ERROR;
           if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "TCP connect failed", ws->callbacks.userdata);
           return WS_EVENT_ERROR;
@@ -838,6 +877,10 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
         }
         if (up == 1) {
           ws->state = WS_STATE_OPEN;
+          /* Address list no longer needed once connected. */
+          freeaddrinfo(ws->ai_list);
+          ws->ai_list = NULL;
+          ws->ai_cur = NULL;
           if (header_len < ws->recv_len) {
             memmove(ws->recv_buf, ws->recv_buf + header_len, ws->recv_len - header_len);
             ws->recv_len -= header_len;
@@ -1123,6 +1166,7 @@ void ws_destroy(ws_t *ws) {
   free(ws->host);
   free(ws->path);
   free(ws->frag_buf);
+  if (ws->ai_list) freeaddrinfo(ws->ai_list);
   free(ws);
   sock_cleanup();
 }

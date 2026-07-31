@@ -199,14 +199,13 @@ def test_15_ipv4():
     assert rc == 0, f"IPv4 echo failed (exit {rc})"
 
 def test_15_ipv6():
-    """#15b: IPv6 connectivity (soft-skip if unavailable)."""
+    """#15b: IPv6 connectivity — connect to loopback [::1]."""
     port = 19109
     proc = _start_uws(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://[::1]:{port}/")
     proc.terminate(); proc.wait()
-    if rc != 0:
-        pytest.skip(f"IPv6 not available on this host (exit {rc})")
+    assert rc == 0, f"IPv6 loopback connect failed (exit {rc})"
 
 
 def test_16_flood():
@@ -257,3 +256,20 @@ def test_20_oversize():
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
     srv.terminate(); srv.wait()
     assert rc == 0, f"oversize test failed (exit {rc})"
+
+
+def test_21_dual_stack_fallback():
+    """#21: Dual-stack fallback — 'localhost' resolves to ::1 first, but
+    the server listens on IPv4 only. Client must fall back to 127.0.0.1.
+
+    echo_server.py binds 0.0.0.0 (IPv4-only), so the ::1 attempt is
+    refused and ws_client must try the next resolved address.
+    """
+    port = 19113
+    srv = subprocess.Popen([sys.executable, ECHO_SERVER, str(port)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert _wait_port(port), "echo_server.py did not start"
+    echo_bin = find_echo_test()
+    rc = _run_client(echo_bin, f"ws://localhost:{port}/echo")
+    srv.terminate(); srv.wait()
+    assert rc == 0, f"dual-stack fallback failed (exit {rc})"

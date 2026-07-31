@@ -69,7 +69,41 @@ int main(void) {
         parse_url("ws://0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789:8080/x", &host, &port, &path) == 0 &&
         strlen(host) == 100 && port == 8080);
     if (host) free(host);
-    if (path) free(path);
+    if (path) free(path); host = NULL; path = NULL;
+
+    test("ipv6 loopback",
+        parse_url("ws://[::1]:9001/", &host, &port, &path) == 0 &&
+        strcmp(host, "::1") == 0 && port == 9001 && strcmp(path, "/") == 0);
+    if (host) free(host);
+    if (path) free(path); host = NULL; path = NULL;
+
+    test("ipv6 default port",
+        parse_url("ws://[::1]/echo", &host, &port, &path) == 0 &&
+        strcmp(host, "::1") == 0 && port == 80 && strcmp(path, "/echo") == 0);
+    if (host) free(host);
+    if (path) free(path); host = NULL; path = NULL;
+
+    test("ipv6 v4-mapped",
+        parse_url("ws://[::ffff:192.168.0.1]:8080/", &host, &port, &path) == 0 &&
+        strcmp(host, "::ffff:192.168.0.1") == 0 && port == 8080);
+    if (host) free(host);
+    if (path) free(path); host = NULL; path = NULL;
+
+    test("ipv6 long form",
+        parse_url("ws://[2001:db8::ff00:42:8329]/x", &host, &port, &path) == 0 &&
+        strcmp(host, "2001:db8::ff00:42:8329") == 0 && port == 80);
+    if (host) free(host);
+    if (path) free(path); host = NULL; path = NULL;
+
+    test("unterminated bracket",
+        parse_url("ws://[::1/path", &host, &port, &path) != 0);
+    test("host NULL after unterminated bracket", host == NULL);
+    test("path NULL after unterminated bracket", path == NULL);
+
+    test("empty bracket host",
+        parse_url("ws://[]/path", &host, &port, &path) != 0);
+    test("host NULL after empty bracket", host == NULL);
+    test("path NULL after empty bracket", path == NULL);
 
     return failed ? 1 : 0;
 }
