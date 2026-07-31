@@ -66,28 +66,21 @@ def _find_uws():
             return p
     return None
 
-def _start_uws_or_fallback(port):
-    """Start uWS echo-server, fall back to Python echo_server.py if unavailable."""
+def _start_uws(port):
+    """Start uWS echo-server (required — no fallback)."""
     uws_bin = _find_uws()
-    if uws_bin:
-        proc = subprocess.Popen([uws_bin, str(port)],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if _wait_port(port):
-            sys.stderr.write(f"  server: uWS ({uws_bin})\n")
-            return proc
-        proc.terminate(); proc.wait()
-    # fallback
-    sys.stderr.write(f"  server: echo_server.py (fallback, uWS not found)\n")
-    proc = subprocess.Popen([sys.executable, ECHO_SERVER, str(port)],
+    assert uws_bin, "uws_echo binary not found — build tests/interop first"
+    proc = subprocess.Popen([uws_bin, str(port)],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    assert _wait_port(port), f"echo_server.py did not start on port {port}"
+    assert _wait_port(port), f"uWS echo-server did not start on port {port}"
+    sys.stderr.write(f"  server: uWS ({uws_bin})\n")
     return proc
 
 
 def test_5_handshake_and_echo():
     """#5: Basic handshake + echo."""
     port = 19100
-    proc = _start_uws_or_fallback(port)
+    proc = _start_uws(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     proc.terminate(); proc.wait()
@@ -101,9 +94,7 @@ def test_6_binary_echo():
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     assert _wait_port(port), "echo_server.py did not start"
     int_bin = _find_binary("integration_test")
-    if not int_bin:
-        srv.terminate(); srv.wait()
-        pytest.skip("integration_test not found")
+    assert int_bin, "integration_test binary not built"
     rc = _run_client(int_bin, f"ws://127.0.0.1:{port}/")
     srv.terminate(); srv.wait()
     assert rc == 0, f"integration_test failed with exit code {rc}"
@@ -112,7 +103,7 @@ def test_6_binary_echo():
 def test_7_normal_close():
     """#7: Normal closure (1000) — echo_test already covers close."""
     port = 19102
-    proc = _start_uws_or_fallback(port)
+    proc = _start_uws(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     proc.terminate(); proc.wait()
@@ -136,8 +127,7 @@ def test_9_partial_send():
     port = 19103
     srv = _start_server("slow_consumer_server.py", port)
     client_bin = _find_binary("test_partial_send")
-    if not client_bin:
-        pytest.skip("test_partial_send not built")
+    assert client_bin, "test_partial_send binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
     srv.terminate(); srv.wait()
     assert rc == 0, f"partial_send test failed (exit {rc})"
@@ -154,8 +144,7 @@ def test_11_blackhole():
     """#11: Blackhole timeout — server accepts but never sends data."""
     port = 19104
     listen_script = os.path.join(HANDSHAKE_DIR, "listen_only_server.py")
-    if not os.path.exists(listen_script):
-        pytest.skip("listen_only_server.py not found")
+    assert os.path.exists(listen_script), "listen_only_server.py not found"
     srv = subprocess.Popen([sys.executable, listen_script, str(port), "10"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
@@ -189,8 +178,7 @@ def test_14_bad_handshake():
     """#14: Bad HTTP response (404) — reuse bad_handshake_server."""
     port = 19107
     bh_script = os.path.join(HANDSHAKE_DIR, "bad_handshake_server.py")
-    if not os.path.exists(bh_script):
-        pytest.skip("bad_handshake_server.py not found")
+    assert os.path.exists(bh_script), "bad_handshake_server.py not found"
     srv = subprocess.Popen(
         [sys.executable, bh_script, "404", str(port)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -204,7 +192,7 @@ def test_14_bad_handshake():
 def test_15_ipv4():
     """#15a: IPv4 connectivity."""
     port = 19108
-    proc = _start_uws_or_fallback(port)
+    proc = _start_uws(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
     proc.terminate(); proc.wait()
@@ -213,7 +201,7 @@ def test_15_ipv4():
 def test_15_ipv6():
     """#15b: IPv6 connectivity (soft-skip if unavailable)."""
     port = 19109
-    proc = _start_uws_or_fallback(port)
+    proc = _start_uws(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://[::1]:{port}/")
     proc.terminate(); proc.wait()
@@ -226,8 +214,7 @@ def test_16_flood():
     port = 19109
     srv = _start_server("flood_server.py", port, "1000")
     client_bin = _find_binary("test_flood")
-    if not client_bin:
-        pytest.skip("test_flood not built")
+    assert client_bin, "test_flood binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
     srv.terminate(); srv.wait()
     assert rc == 0, f"flood test failed (exit {rc})"
@@ -236,10 +223,9 @@ def test_16_flood():
 def test_17_double_close():
     """#17: Double close — client calls ws_close() twice."""
     port = 19110
-    proc = _start_uws_or_fallback(port)
+    proc = _start_uws(port)
     client_bin = _find_binary("test_double_close")
-    if not client_bin:
-        pytest.skip("test_double_close not built")
+    assert client_bin, "test_double_close binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
     proc.terminate(); proc.wait()
     assert rc == 0, f"double_close test failed (exit {rc})"
@@ -267,8 +253,7 @@ def test_20_oversize():
     port = 19112
     srv = _start_server("oversize_server.py", port)
     client_bin = _find_binary("test_oversize")
-    if not client_bin:
-        pytest.skip("test_oversize not built")
+    assert client_bin, "test_oversize binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
     srv.terminate(); srv.wait()
     assert rc == 0, f"oversize test failed (exit {rc})"
