@@ -18,7 +18,7 @@ SIZE = int(sys.argv[2])
 KIND = sys.argv[3] if len(sys.argv) > 3 else "text"
 CHOP = int(sys.argv[4]) if len(sys.argv) > 4 else 1024 * 1024
 
-payload = (b"A" if KIND == "text" else b"\xaa") * SIZE
+payload_byte = b"A" if KIND == "text" else b"\xaa"
 if KIND == "text":
     opcode = 0x1
 else:
@@ -45,10 +45,12 @@ try:
     head.extend(struct.pack(">Q", SIZE))
 
     conn.sendall(bytes(head))
+    chunk = payload_byte * min(CHOP, SIZE)
+    chunk_view = memoryview(chunk)
     off = 0
     while off < SIZE:
         n = min(CHOP, SIZE - off)
-        conn.sendall(payload[off:off + n])
+        conn.sendall(chunk_view[:n])
         off += n
         time.sleep(0.02)
 
@@ -61,7 +63,7 @@ try:
     time.sleep(1)
 except socket.timeout:
     pass
-except Exception:
+except (BrokenPipeError, ConnectionResetError, OSError):
     pass
 finally:
     try:

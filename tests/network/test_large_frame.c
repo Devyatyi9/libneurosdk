@@ -28,10 +28,11 @@ static int got_message = 0;
 static int got_close = 0;
 static int got_error = 0;
 
-static unsigned char *recv_payload = NULL;
 static size_t recv_len = 0;
 static size_t expected_len = 0;
 static int expected_binary = 0;
+static int content_ok = 0;
+static int type_ok = 0;
 
 static void on_open(ws_t *ws, void *userdata) {
   (void)ws; (void)userdata;
@@ -40,10 +41,16 @@ static void on_open(ws_t *ws, void *userdata) {
 
 static void on_message(ws_t *ws, const char *data, size_t len, int binary, void *userdata) {
   (void)ws; (void)userdata;
-  recv_payload = (unsigned char *)data;
   recv_len = len;
   got_message = 1;
-  (void)binary;
+  type_ok = (binary == expected_binary);
+  content_ok = (len == expected_len);
+
+  const unsigned char expect = expected_binary ? 0xAA : (unsigned char)'A';
+  const unsigned char *payload = (const unsigned char *)data;
+  for (size_t i = 0; content_ok && i < len; i++) {
+    if (payload[i] != expect) content_ok = 0;
+  }
 }
 
 static void on_close(ws_t *ws, uint16_t code, const char *reason, size_t reason_len, void *userdata) {
@@ -90,25 +97,18 @@ int main(int argc, char *argv[]) {
   } else if (recv_len != expected_len) {
     fprintf(stderr, "[fail] length mismatch: got %zu, expected %zu\n", recv_len, expected_len);
     fail = 1;
+  } else if (!type_ok) {
+    fprintf(stderr, "[fail] message type mismatch: got %s, expected %s\n",
+            expected_binary ? "text" : "binary",
+            expected_binary ? "binary" : "text");
+    fail = 1;
+  } else if (!content_ok) {
+    fprintf(stderr, "[fail] content mismatch (expected byte 0x%02X)\n",
+            expected_binary ? 0xAA : (unsigned char)'A');
+    fail = 1;
   } else {
-    /* Verify content pattern. */
-    unsigned char expect = expected_binary ? 0xAA : (unsigned char)'A';
-    int content_ok = 1;
-    size_t step = 65536;
-    for (size_t i = 0; i < recv_len; i += step) {
-      size_t n = recv_len - i < step ? recv_len - i : step;
-      for (size_t j = 0; j < n; j++) {
-        if (recv_payload[i + j] != expect) { content_ok = 0; break; }
-      }
-      if (!content_ok) break;
-    }
-    if (!content_ok) {
-      fprintf(stderr, "[fail] content mismatch (expected byte 0x%02X)\n", expect);
-      fail = 1;
-    } else {
-      printf("[pass] received %zu-byte large %s frame\n", recv_len,
-             expected_binary ? "binary" : "text");
-    }
+    printf("[pass] received %zu-byte large %s frame\n", recv_len,
+           expected_binary ? "binary" : "text");
   }
 
   ws_close(ws);

@@ -210,7 +210,7 @@ def test_15_ipv6():
 
 def test_16_flood():
     """#16: Flood — 1000 frames sent rapidly."""
-    port = 19109
+    port = 19120
     srv = _start_server("flood_server.py", port, "1000")
     client_bin = _find_binary("test_flood")
     assert client_bin, "test_flood binary not built"
@@ -266,7 +266,7 @@ def test_21_dual_stack_fallback():
     echo_server.py binds 0.0.0.0 (IPv4-only), so the ::1 attempt is
     refused and ws_client must try the next resolved address.
     """
-    port = 19113
+    port = 19121
     srv = subprocess.Popen([sys.executable, ECHO_SERVER, str(port)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     assert _wait_port(port), "echo_server.py did not start"
@@ -357,3 +357,14 @@ def test_25_large_single_frame_binary():
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/", str(size), "binary")
     srv.terminate(); srv.wait()
     assert rc == 0, f"large single binary frame failed (exit {rc})"
+
+
+def test_26_invalid_64bit_payload_length():
+    """#26: RFC 6455 forbids the high bit in a 64-bit payload length."""
+    port = 19122
+    size = 1 << 63
+    srv = _start_server("large_frame_server.py", port, str(size), "binary")
+    echo_bin = find_echo_test()
+    rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
+    srv.terminate(); srv.wait()
+    assert rc != 0, "invalid 64-bit payload length was accepted"

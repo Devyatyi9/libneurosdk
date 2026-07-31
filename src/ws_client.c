@@ -739,9 +739,17 @@ static int parse_upgrade_response(const char *buf, size_t len, size_t *header_le
 /*  Fragmented-message reassembly buffer                               */
 /* ================================================================== */
 static int frag_append(ws_t *ws, const unsigned char *data, size_t len) {
-  if (ws->frag_len + len > ws->frag_cap) {
-    size_t newcap = ws->frag_cap ? ws->frag_cap * 2 : 4096;
-    while (newcap < ws->frag_len + len) newcap *= 2;
+  if (len > SIZE_MAX - ws->frag_len) return -1;
+  size_t required = ws->frag_len + len;
+  if (required > ws->frag_cap) {
+    size_t newcap = ws->frag_cap ? ws->frag_cap : 4096;
+    while (newcap < required) {
+      if (newcap > SIZE_MAX / 2) {
+        newcap = required;
+        break;
+      }
+      newcap *= 2;
+    }
     unsigned char *nb = (unsigned char *)realloc(ws->frag_buf, newcap);
     if (!nb) return -1;
     ws->frag_buf = nb;
@@ -954,6 +962,15 @@ static int ws_start_large_frame(ws_t *ws, const unsigned char *p, size_t header_
   if (opcode != 0x0 && ws->frag_active) {
     ws->state = WS_STATE_ERROR;
     if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "expected continuation frame", ws->callbacks.userdata);
+    return -1;
+  }
+
+  size_t prior_len = opcode == 0x0 ? ws->frag_len : 0;
+  if (payload_len > SIZE_MAX || payload_len > SIZE_MAX - prior_len) {
+    unsigned char fail[2] = {0x03, 0xf1}; /* 1009 */
+    ws_send_control(ws, 0x88, fail, 2);
+    ws->state = WS_STATE_ERROR;
+    if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "message size exceeds addressable memory", ws->callbacks.userdata);
     return -1;
   }
 
@@ -1457,6 +1474,13 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
           header_len = 4;
         } else if (payload_len == 127) {
           if (ws->recv_len - consumed < 10) break;
+          if (p[2] & 0x80) {
+            unsigned char fail[2] = {0x03, 0xea}; /* 1002 */
+            ws_send_control(ws, 0x88, fail, 2);
+            ws->state = WS_STATE_ERROR;
+            if (ws->callbacks.on_error) ws->callbacks.on_error(ws, "invalid 64-bit payload length", ws->callbacks.userdata);
+            return WS_EVENT_ERROR;
+          }
           payload_len = 0;
           for (int i = 0; i < 8; i++)
             payload_len = (payload_len << 8) | p[2 + i];
