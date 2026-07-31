@@ -33,6 +33,7 @@
   #include <unistd.h>
   #include <fcntl.h>
   #include <poll.h>
+  #include <signal.h>
   #include <arpa/inet.h>
   #include <netinet/in.h>
   #if defined(__linux__)
@@ -121,7 +122,15 @@ static void sock_cleanup(void) {
   if (--sock_refcount == 0) WSACleanup();
 }
 #else
-static int sock_init(void) { return 0; }
+static int sock_init(void) {
+  /* On POSIX, writing to a peer that already closed the connection
+   * raises SIGPIPE (default action: terminate the process) instead of
+   * making send() return an error. A WS client must survive a peer that
+   * dropped mid-send — suppress the signal so EPIPE surfaces through
+   * send()'s return value instead. */
+  signal(SIGPIPE, SIG_IGN);
+  return 0;
+}
 static void sock_cleanup(void) {}
 #endif
 
