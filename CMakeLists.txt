@@ -8,6 +8,7 @@ option(NEURO_BUILD_STATIC "Build the library statically" ON)
 option(NEURO_BUILD_TESTS "Build test executables" OFF)
 option(NEURO_BUILD_EXAMPLES "Build example executables" OFF)
 option(NEURO_SANITIZE "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+option(ENABLE_PERMESSAGE_DEFLATE "Build the internal RFC 7692 codec" ON)
 
 if(NEURO_SANITIZE)
 	if(MSVC)
@@ -46,10 +47,54 @@ set(SOURCES
 	${CMAKE_CURRENT_SOURCE_DIR}/src/ws_client.c
 )
 
+if(ENABLE_PERMESSAGE_DEFLATE)
+	# miniz.h includes miniz_zip.h even when archive APIs are disabled. Supply an
+	# empty build-tree shim so no ZIP header or implementation is vendored.
+	file(GENERATE
+		OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/miniz-private/miniz_zip.h
+		CONTENT "#pragma once\n"
+	)
+	add_library(neuro_miniz OBJECT
+		vendor/miniz/miniz.c
+		vendor/miniz/miniz_tdef.c
+		vendor/miniz/miniz_tinfl.c
+	)
+	set_target_properties(neuro_miniz PROPERTIES POSITION_INDEPENDENT_CODE ON)
+	target_include_directories(neuro_miniz PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/vendor/miniz
+		${CMAKE_CURRENT_BINARY_DIR}/miniz-private
+	)
+	target_compile_definitions(neuro_miniz PRIVATE
+		MINIZ_NO_ARCHIVE_APIS
+		MINIZ_NO_STDIO
+		MINIZ_NO_TIME
+		MINIZ_NO_ZLIB_COMPATIBLE_NAMES
+	)
+	if(MSVC)
+		target_compile_options(neuro_miniz PRIVATE /W0)
+	else()
+		target_compile_options(neuro_miniz PRIVATE -w)
+	endif()
+
+	add_library(ws_deflate OBJECT src/ws_deflate.c)
+	set_target_properties(ws_deflate PROPERTIES POSITION_INDEPENDENT_CODE ON)
+	target_include_directories(ws_deflate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+	target_include_directories(ws_deflate PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/vendor/miniz
+		${CMAKE_CURRENT_BINARY_DIR}/miniz-private
+	)
+endif()
+
 if(NEURO_BUILD_STATIC)
 	add_library(${PROJECT_NAME} STATIC ${SOURCES})
 else()
 	add_library(${PROJECT_NAME} SHARED ${SOURCES})
+endif()
+if(ENABLE_PERMESSAGE_DEFLATE)
+	target_sources(${PROJECT_NAME} PRIVATE
+		$<TARGET_OBJECTS:ws_deflate>
+		$<TARGET_OBJECTS:neuro_miniz>
+	)
 endif()
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -69,7 +114,6 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 if(WIN32)
 	target_link_libraries(${PROJECT_NAME} PRIVATE ws2_32 bcrypt)
 endif()
-
 configure_file(
 	${CMAKE_CURRENT_SOURCE_DIR}/neurosdk.pc.in
 	${CMAKE_CURRENT_BINARY_DIR}/neurosdk.pc
@@ -88,6 +132,12 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/neurosdk.h
 if(NEURO_BUILD_TESTS)
 	add_library(ws_client_test STATIC src/ws_client.c)
 	target_include_directories(ws_client_test PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+	if(ENABLE_PERMESSAGE_DEFLATE)
+		target_sources(ws_client_test PRIVATE
+			$<TARGET_OBJECTS:ws_deflate>
+			$<TARGET_OBJECTS:neuro_miniz>
+		)
+	endif()
 	if(WIN32)
 		target_link_libraries(ws_client_test PUBLIC ws2_32 bcrypt)
 	endif()
@@ -106,9 +156,18 @@ if(NEURO_BUILD_TESTS)
 
 	# Unit tests (include ws_client.c directly for static function access)
 	set(UNIT_TESTS test_url test_sha1 test_base64 test_frame)
+	if(ENABLE_PERMESSAGE_DEFLATE)
+		list(APPEND UNIT_TESTS test_ws_deflate)
+	endif()
 	foreach(t ${UNIT_TESTS})
 		add_executable(${t} tests/unit/${t}.c)
 		target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+		if(t STREQUAL "test_ws_deflate")
+			target_sources(${t} PRIVATE
+				$<TARGET_OBJECTS:ws_deflate>
+				$<TARGET_OBJECTS:neuro_miniz>
+			)
+		endif()
 		if(WIN32)
 			target_link_libraries(${t} PRIVATE ws2_32 bcrypt)
 		endif()
