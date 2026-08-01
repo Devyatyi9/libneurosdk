@@ -10,7 +10,7 @@ Usage:
 import os, socket, struct, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ws_frame import read_http_upgrade, make_101, build_close
+from ws_frame import build_close, make_101, read_client_frame, read_http_upgrade
 
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1])
@@ -31,11 +31,9 @@ srv.listen(1)
 srv.settimeout(120)
 
 try:
-    conn, addr = srv.accept()
+    conn, _ = srv.accept()
     conn.settimeout(30)
-    data, key = read_http_upgrade(conn)
-    if key is None:
-        conn.close(); srv.close(); sys.exit(0)
+    _, key = read_http_upgrade(conn)
     conn.sendall(make_101(key))
 
     # Build the large frame header (FIN + opcode, 8-byte length).
@@ -45,6 +43,13 @@ try:
     head.extend(struct.pack(">Q", SIZE))
 
     conn.sendall(bytes(head))
+    if SIZE >= 1 << 63:
+        fin, received_opcode, payload = read_client_frame(conn)
+        if not fin or received_opcode != 0x8 or payload != b"\x03\xea":
+            raise ConnectionError("expected protocol Close response with code 1002")
+        conn.close()
+        sys.exit(0)
+
     chunk = payload_byte * min(CHOP, SIZE)
     chunk_view = memoryview(chunk)
     off = 0
@@ -54,19 +59,10 @@ try:
         off += n
         time.sleep(0.02)
 
-    # Give the client a moment to process, then close gracefully.
-    time.sleep(0.5)
-    try:
-        conn.sendall(build_close(1000))
-    except OSError:
-        pass
-    time.sleep(1)
-except socket.timeout:
-    pass
-except (BrokenPipeError, ConnectionResetError, OSError):
-    pass
+    conn.sendall(build_close(1000))
+    fin, received_opcode, payload = read_client_frame(conn)
+    if not fin or received_opcode != 0x8 or payload != b"\x03\xe8":
+        raise ConnectionError("expected clean Close response with code 1000")
+    conn.close()
 finally:
-    try:
-        srv.close()
-    except OSError:
-        pass
+    srv.close()

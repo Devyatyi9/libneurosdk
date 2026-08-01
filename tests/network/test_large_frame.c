@@ -33,18 +33,19 @@ static uint64_t now_ms(void) {
 #endif
 
 static int connected = 0;
-static int got_message = 0;
 static int got_close = 0;
 static int got_error = 0;
 static int close_code = 0;
 static int echo_mode = 0;
-static int echo_sent = 0;
+static size_t message_count = 0;
+static size_t echo_count = 0;
+static size_t expected_count = 1;
 
 static size_t recv_len = 0;
 static size_t expected_len = 0;
 static int expected_binary = 0;
-static int content_ok = 0;
-static int type_ok = 0;
+static int content_ok = 1;
+static int type_ok = 1;
 
 static void on_open(ws_t *ws, void *userdata) {
 	(void)ws;
@@ -59,10 +60,10 @@ static void on_message(ws_t *ws,
                        void *userdata) {
 	(void)ws;
 	(void)userdata;
+	message_count++;
 	recv_len = len;
-	got_message = 1;
-	type_ok = (binary == expected_binary);
-	content_ok = (len == expected_len);
+	type_ok = type_ok && binary == expected_binary;
+	content_ok = content_ok && len == expected_len;
 
 	unsigned char const expect = expected_binary ? 0xAA : (unsigned char)'A';
 	unsigned char const *payload = (unsigned char const *)data;
@@ -74,7 +75,7 @@ static void on_message(ws_t *ws,
 	if (echo_mode && type_ok && content_ok) {
 		int rc = binary ? ws_send_binary(ws, data, len) : ws_send(ws, data, len);
 		if (rc == 0) {
-			echo_sent = 1;
+			echo_count++;
 		} else {
 			fprintf(stderr, "[fail] failed to echo large message\n");
 			got_error = 1;
@@ -103,7 +104,9 @@ static void on_error(ws_t *ws, char const *msg, void *userdata) {
 
 int main(int argc, char *argv[]) {
 	if (argc < 3) {
-		fprintf(stderr, "Usage: %s <url> <expected_len> [text|binary] [echo]\n",
+		fprintf(stderr,
+		        "Usage: %s <url> <expected_len> [text|binary] [echo] "
+		        "[expected_count]\n",
 		        argv[0]);
 		return 1;
 	}
@@ -113,6 +116,12 @@ int main(int argc, char *argv[]) {
 		expected_binary = 1;
 	if (argc > 4 && strcmp(argv[4], "echo") == 0)
 		echo_mode = 1;
+	if (argc > 5)
+		expected_count = (size_t)strtoull(argv[5], NULL, 10);
+	if (expected_count == 0) {
+		fprintf(stderr, "expected_count must be greater than zero\n");
+		return 1;
+	}
 
 	ws_callbacks_t callbacks = {on_open, on_message, on_close, on_error, NULL};
 	ws_t *ws = NULL;
@@ -124,16 +133,17 @@ int main(int argc, char *argv[]) {
 	       expected_len, expected_binary ? "binary" : "text");
 
 	uint64_t deadline = now_ms() + 30000;
-	while (!(echo_mode ? got_close : got_message) && !got_error &&
-	       now_ms() < deadline)
+	while (!got_close && !got_error && now_ms() < deadline)
 		ws_poll(ws, 100);
+	ws_state_e final_state = ws_state(ws);
 
 	int fail = 0;
 	if (got_error) {
 		fprintf(stderr, "[fail] error during test\n");
 		fail = 1;
-	} else if (!got_message) {
-		fprintf(stderr, "[fail] timeout waiting for large frame\n");
+	} else if (message_count != expected_count) {
+		fprintf(stderr, "[fail] message count mismatch: got %zu, expected %zu\n",
+		        message_count, expected_count);
 		fail = 1;
 	} else if (recv_len != expected_len) {
 		fprintf(stderr, "[fail] length mismatch: got %zu, expected %zu\n", recv_len,
@@ -148,22 +158,22 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "[fail] content mismatch (expected byte 0x%02X)\n",
 		        expected_binary ? 0xAA : (unsigned char)'A');
 		fail = 1;
-	} else if (echo_mode && !echo_sent) {
-		fprintf(stderr, "[fail] large message was not echoed\n");
+	} else if (echo_mode && echo_count != expected_count) {
+		fprintf(stderr, "[fail] echo count mismatch: got %zu, expected %zu\n",
+		        echo_count, expected_count);
 		fail = 1;
-	} else if (echo_mode && (!got_close || close_code != 1000)) {
-		fprintf(stderr,
-		        "[fail] server did not confirm echoed message with close 1000\n");
+	} else if (!got_close || close_code != 1000) {
+		fprintf(stderr, "[fail] clean close 1000 did not complete\n");
+		fail = 1;
+	} else if (final_state != WS_STATE_CLOSED) {
+		fprintf(stderr, "[fail] final state is %d, expected CLOSED\n",
+		        (int)final_state);
 		fail = 1;
 	} else {
 		printf("[pass] received %zu-byte large %s frame\n", recv_len,
 		       expected_binary ? "binary" : "text");
 	}
 
-	if (ws_state(ws) == WS_STATE_OPEN)
-		ws_close(ws);
-	for (int i = 0; i < 10 && ws_state(ws) == WS_STATE_CLOSING; i++)
-		ws_poll(ws, 100);
 	ws_destroy(ws);
 	return fail ? 1 : 0;
 }

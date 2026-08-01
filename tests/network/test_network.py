@@ -373,7 +373,7 @@ def test_24_large_single_frame_text():
     client_bin = _find_binary("test_large_frame")
     assert client_bin, "test_large_frame binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/", str(size), "text")
-    srv.terminate(); srv.wait()
+    _wait_server(srv, "large_frame_server.py")
     assert rc == 0, f"large single text frame failed (exit {rc})"
 
 
@@ -386,7 +386,7 @@ def test_25_large_single_frame_binary():
     client_bin = _find_binary("test_large_frame")
     assert client_bin, "test_large_frame binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/", str(size), "binary")
-    srv.terminate(); srv.wait()
+    _wait_server(srv, "large_frame_server.py")
     assert rc == 0, f"large single binary frame failed (exit {rc})"
 
 
@@ -399,7 +399,7 @@ def test_26_invalid_64bit_payload_length():
     assert client_bin, "test_negative binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
                      "error-after-open", "invalid 64-bit payload length")
-    srv.terminate(); srv.wait()
+    _wait_server(srv, "large_frame_server.py")
     assert rc == 0, "invalid 64-bit payload length did not produce a protocol error"
 
 
@@ -413,7 +413,7 @@ def test_27_large_fragmented_text_echo():
     assert client_bin, "test_large_frame binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
                      str(size), "text", "echo")
-    srv.terminate(); srv.wait()
+    _wait_server(srv, "fragmented_large_frame_server.py")
     assert rc == 0, f"large fragmented text echo failed (exit {rc})"
 
 
@@ -427,7 +427,7 @@ def test_28_large_fragmented_binary_echo():
     assert client_bin, "test_large_frame binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
                      str(size), "binary", "echo")
-    srv.terminate(); srv.wait()
+    _wait_server(srv, "fragmented_large_frame_server.py")
     assert rc == 0, f"large fragmented binary echo failed (exit {rc})"
 
 
@@ -438,8 +438,8 @@ def test_29_text_rtt_echo():
     client_bin = _find_binary("test_large_frame")
     assert client_bin, "test_large_frame binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
-                     "4096", "text", "echo")
-    srv.terminate(); srv.wait()
+                     "4096", "text", "echo", "1000")
+    _wait_server(srv, "rtt_echo_server.py")
     assert rc == 0, f"text RTT echo failed (exit {rc})"
 
 
@@ -450,8 +450,8 @@ def test_30_empty_binary_rtt_echo():
     client_bin = _find_binary("test_large_frame")
     assert client_bin, "test_large_frame binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
-                     "0", "binary", "echo")
-    srv.terminate(); srv.wait()
+                     "0", "binary", "echo", "1000")
+    _wait_server(srv, "rtt_echo_server.py")
     assert rc == 0, f"empty binary RTT echo failed (exit {rc})"
 
 
@@ -465,7 +465,7 @@ def test_31_fragmented_text_stream_echo():
     assert client_bin, "test_large_frame binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
                      str(size), "text", "echo")
-    srv.terminate(); srv.wait()
+    _wait_server(srv, "fragmented_large_frame_server.py")
     assert rc == 0, f"fragmented text stream echo failed (exit {rc})"
 
 
