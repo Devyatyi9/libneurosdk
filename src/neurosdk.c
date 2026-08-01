@@ -1,20 +1,20 @@
 #include <neurosdk.h>
 
-#include <stddef.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdarg.h>
 #include <ctype.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #if defined(_MSC_VER)
-  #pragma warning(push)
-  #pragma warning(disable : 5105)
+#pragma warning(push)
+#pragma warning(disable : 5105)
 #endif
 #include "tinycthread.h"
 #if defined(_MSC_VER)
-  #pragma warning(pop)
+#pragma warning(pop)
 #endif
 
 #ifndef unreachable
@@ -418,7 +418,10 @@ static void ws_on_open(ws_t *ws, void *userdata) {
 	ctx->connected = true;
 }
 
-static void ws_on_message(ws_t *ws, const char *data, size_t len, int binary,
+static void ws_on_message(ws_t *ws,
+                          char const *data,
+                          size_t len,
+                          int binary,
                           void *userdata) {
 	context_t *ctx = (context_t *)userdata;
 
@@ -428,8 +431,7 @@ static void ws_on_message(ws_t *ws, const char *data, size_t len, int binary,
 		return;
 	}
 	for (size_t i = 0; i < len; i++) {
-		if (!isprint((unsigned char)data[i]) &&
-		    !isspace((unsigned char)data[i])) {
+		if (!isprint((unsigned char)data[i]) && !isspace((unsigned char)data[i])) {
 			LOG_ERROR(ctx, "Received binary (non-plaintext) data from server!");
 			ctx->conn_err = NeuroSDK_ReceivedBinary;
 			return;
@@ -448,16 +450,20 @@ static void ws_on_message(ws_t *ws, const char *data, size_t len, int binary,
 	}
 }
 
-static void ws_on_close(ws_t *ws, uint16_t code, const char *reason,
-                        size_t reason_len, void *userdata) {
+static void ws_on_close(ws_t *ws,
+                        uint16_t code,
+                        char const *reason,
+                        size_t reason_len,
+                        void *userdata) {
 	context_t *ctx = (context_t *)userdata;
-	LOG_WARN(ctx, "Connection closed (code=%u, reason=%.*s). Marking as "
-	              "disconnected.",
+	LOG_WARN(ctx,
+	         "Connection closed (code=%u, reason=%.*s). Marking as "
+	         "disconnected.",
 	         code, (int)reason_len, reason);
 	ctx->connected = false;
 }
 
-static void ws_on_error(ws_t *ws, const char *msg, void *userdata) {
+static void ws_on_error(ws_t *ws, char const *msg, void *userdata) {
 	context_t *ctx = (context_t *)userdata;
 	LOG_WARN(ctx, "WebSocket error: %s", msg);
 	ctx->connected = false;
@@ -663,8 +669,7 @@ neurosdk_context_send(neurosdk_context_t *ctx, neurosdk_message_t *msg) {
 	}
 	context_t *context = (context_t *)(*ctx);
 	if (!context->ws) {
-		LOG_ERROR(context,
-		          "neurosdk_context_send: invalid context (ws is NULL).");
+		LOG_ERROR(context, "neurosdk_context_send: invalid context (ws is NULL).");
 		return NeuroSDK_Uninitialized;
 	}
 	if (!neurosdk_context_connected(ctx)) {

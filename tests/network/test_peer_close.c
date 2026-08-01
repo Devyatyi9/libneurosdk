@@ -60,7 +60,8 @@ int main(int argc, char **argv) {
 		ws_poll(ws, 100);
 	int success = opened && closed && !failed && ws_state(ws) == WS_STATE_CLOSED;
 	if (!success)
-		fprintf(stderr, "peer-close result: opened=%d closed=%d failed=%d state=%d\n",
+		fprintf(stderr,
+		        "peer-close result: opened=%d closed=%d failed=%d state=%d\n",
 		        opened, closed, failed, (int)ws_state(ws));
 	ws_destroy(ws);
 	return success ? 0 : 1;
