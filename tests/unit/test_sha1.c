@@ -5,8 +5,10 @@
 static int failed = 0;
 
 static void hex(unsigned char const *in, char *out) {
-	for (int i = 0; i < 20; i++)
-		out += sprintf(out, "%02x", in[i]);
+	for (int i = 0; i < 20; i++) {
+		snprintf(out, 3, "%02x", in[i]);
+		out += 2;
+	}
 }
 
 static void test(char const *name,
