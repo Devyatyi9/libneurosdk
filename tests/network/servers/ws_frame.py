@@ -72,19 +72,60 @@ def make_101(client_key):
 
 
 def read_http_upgrade(conn):
-    """Read until \r\n\r\n, return (full_data, key) or (None, None)."""
-    data = b""
+    """Read and validate a complete RFC 6455 client upgrade request."""
+    max_header_size = 16 * 1024
+    data = bytearray()
     while b"\r\n\r\n" not in data:
-        chunk = conn.recv(4096)
+        if len(data) >= max_header_size:
+            raise ConnectionError("HTTP Upgrade request exceeds 16 KiB")
+        chunk = conn.recv(min(4096, max_header_size - len(data)))
         if not chunk:
-            return None, None
-        data += chunk
-    # Extract Sec-WebSocket-Key
-    key = None
-    for line in data.split(b"\r\n"):
-        if line.lower().startswith(b"sec-websocket-key:"):
-            key = line.split(b":", 1)[1].strip().decode()
-    return data, key
+            raise ConnectionError("connection closed during HTTP Upgrade request")
+        data.extend(chunk)
+
+    header_end = data.index(b"\r\n\r\n") + 4
+    header = bytes(data[:header_end])
+    lines = header[:-4].split(b"\r\n")
+    if not lines or len(lines[0].split(b" ")) != 3:
+        raise ConnectionError("malformed HTTP request line")
+    method, target, version = lines[0].split(b" ")
+    if method != b"GET" or not target.startswith(b"/") or version != b"HTTP/1.1":
+        raise ConnectionError("invalid WebSocket HTTP request line")
+
+    headers = {}
+    for line in lines[1:]:
+        if b":" not in line:
+            raise ConnectionError("malformed HTTP header")
+        name, value = line.split(b":", 1)
+        name = name.strip().lower()
+        if not name or name in headers:
+            raise ConnectionError("missing or duplicate HTTP header name")
+        headers[name] = value.strip()
+
+    if not headers.get(b"host"):
+        raise ConnectionError("missing Host header")
+    if headers.get(b"upgrade", b"").lower() != b"websocket":
+        raise ConnectionError("missing Upgrade: websocket header")
+    connection_tokens = {
+        token.strip().lower() for token in headers.get(b"connection", b"").split(b",")
+    }
+    if b"upgrade" not in connection_tokens:
+        raise ConnectionError("missing Connection: Upgrade token")
+    if headers.get(b"sec-websocket-version") != b"13":
+        raise ConnectionError("missing Sec-WebSocket-Version: 13 header")
+
+    key_bytes = headers.get(b"sec-websocket-key")
+    if key_bytes is None:
+        raise ConnectionError("missing Sec-WebSocket-Key header")
+    try:
+        decoded_key = base64.b64decode(key_bytes, validate=True)
+        key = key_bytes.decode("ascii")
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ConnectionError("invalid Sec-WebSocket-Key header") from exc
+    if len(decoded_key) != 16:
+        raise ConnectionError("Sec-WebSocket-Key must decode to 16 bytes")
+
+    return bytes(data), key
 
 
 def recv_exact(conn, size):

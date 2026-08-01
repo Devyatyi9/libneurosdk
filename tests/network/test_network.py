@@ -136,7 +136,7 @@ def test_8_drip_feed():
     srv = _start_server("drip_feed_server.py", port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
-    srv.terminate(); srv.wait()
+    _wait_server(srv, "drip_feed_server.py")
     assert rc == 0, f"drip_feed test failed (exit {rc})"
 
 
