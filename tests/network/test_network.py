@@ -153,9 +153,11 @@ def test_9_partial_send():
 
 def test_10_connection_refused():
     """#10: Connection refused — connect to closed port."""
-    echo_bin = find_echo_test()
-    rc = _run_client(echo_bin, "ws://127.0.0.1:19999/")
-    assert rc != 0, "expected connection refused error"
+    client_bin = _find_binary("test_negative")
+    assert client_bin, "test_negative binary not built"
+    rc = _run_client(client_bin, "ws://127.0.0.1:19999/",
+                     "error-before-open", "TCP connect failed")
+    assert rc == 0, "connection refusal did not produce the expected error"
 
 
 def test_11_blackhole():
@@ -166,30 +168,36 @@ def test_11_blackhole():
     srv = subprocess.Popen([sys.executable, listen_script, str(port), "10"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
-    echo_bin = find_echo_test()
-    rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
+    client_bin = _find_binary("test_negative")
+    assert client_bin, "test_negative binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     "timeout-before-open")
     srv.terminate(); srv.wait()
-    assert rc != 0, "expected blackhole timeout error"
+    assert rc == 0, "blackhole did not remain pending until the expected timeout"
 
 
 def test_12_tcp_rst():
     """#12: TCP RST — server sends RST after partial handshake."""
     port = 19105
     srv = _start_server("tcp_rst_server.py", port)
-    echo_bin = find_echo_test()
-    rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
-    srv.terminate(); srv.wait()
-    assert rc != 0, "expected TCP RST error"
+    client_bin = _find_binary("test_negative")
+    assert client_bin, "test_negative binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     "error-after-open", "recv failed")
+    _wait_server(srv, "tcp_rst_server.py")
+    assert rc == 0, "TCP RST did not produce an error after on_open"
 
 
 def test_13_tcp_fin():
     """#13: TCP FIN without WS Close — server closes TCP gracefully."""
     port = 19106
     srv = _start_server("tcp_fin_server.py", port)
-    echo_bin = find_echo_test()
-    rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
-    srv.terminate(); srv.wait()
-    assert rc != 0, "expected TCP FIN error (no WS close)"
+    client_bin = _find_binary("test_negative")
+    assert client_bin, "test_negative binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     "close-after-open", "1006")
+    _wait_server(srv, "tcp_fin_server.py")
+    assert rc == 0, "TCP FIN without Close did not produce close code 1006"
 
 
 def test_14_bad_handshake():
@@ -201,10 +209,12 @@ def test_14_bad_handshake():
         [sys.executable, bh_script, "404", str(port)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
-    echo_bin = find_echo_test()
-    rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
+    client_bin = _find_binary("test_negative")
+    assert client_bin, "test_negative binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     "error-before-open", "bad HTTP response during upgrade")
     srv.terminate(); srv.wait()
-    assert rc != 0, "expected bad handshake error (404)"
+    assert rc == 0, "HTTP 404 did not produce the expected handshake error"
 
 
 def test_15_ipv4():
@@ -261,9 +271,11 @@ def test_18_ping_interleave():
 
 def test_19_dns_failure():
     """#19: DNS resolution failure — connect to nonexistent host."""
-    echo_bin = find_echo_test()
-    rc = _run_client(echo_bin, "ws://this-domain-does-not-exist-xyz.internal/")
-    assert rc != 0, "expected DNS failure error"
+    client_bin = _find_binary("test_negative")
+    assert client_bin, "test_negative binary not built"
+    rc = _run_client(client_bin, "ws://this-domain-does-not-exist-xyz.internal/",
+                     "error-before-open", "DNS resolve failed")
+    assert rc == 0, "DNS failure did not produce the expected resolution error"
 
 
 def test_20_oversize():
@@ -383,10 +395,12 @@ def test_26_invalid_64bit_payload_length():
     port = 19122
     size = 1 << 63
     srv = _start_server("large_frame_server.py", port, str(size), "binary")
-    echo_bin = find_echo_test()
-    rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
+    client_bin = _find_binary("test_negative")
+    assert client_bin, "test_negative binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     "error-after-open", "invalid 64-bit payload length")
     srv.terminate(); srv.wait()
-    assert rc != 0, "invalid 64-bit payload length was accepted"
+    assert rc == 0, "invalid 64-bit payload length did not produce a protocol error"
 
 
 def test_27_large_fragmented_text_echo():

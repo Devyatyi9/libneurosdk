@@ -1,4 +1,4 @@
-"""TCP server that sends RST after accepting connection.
+"""WebSocket server that sends RST after completing the upgrade.
 
 Tests #12: TCP RST — client must detect abrupt connection reset.
 Sets SO_LINGER to 0 so close() sends RST instead of FIN.
@@ -18,26 +18,18 @@ srv.listen(1)
 srv.settimeout(30)
 
 try:
-    conn, addr = srv.accept()
+    conn, _ = srv.accept()
     conn.settimeout(5)
-    data, key = read_http_upgrade(conn)
+    _, key = read_http_upgrade(conn)
     if key is None:
-        conn.close(); srv.close(); sys.exit(0)
-    # Send partial 101 then RST (intentionally drop before Accept header)
-    try:
-        conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\n")
-    except OSError:
-        pass
-    # Set SO_LINGER=0 to force RST on close
-    l_onoff = 1
-    l_linger = 0
+        raise ConnectionError("missing WebSocket upgrade key")
+    conn.sendall(make_101(key))
+    time.sleep(1)
+    # Set SO_LINGER=0 to force RST after the client has observed on_open.
+    l_onoff, l_linger = 1, 0
     conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
                     struct.pack('ii', l_onoff, l_linger))
     time.sleep(0.1)
     conn.close()
-except socket.timeout:
-    pass
-except ConnectionResetError:
-    pass
 finally:
     srv.close()

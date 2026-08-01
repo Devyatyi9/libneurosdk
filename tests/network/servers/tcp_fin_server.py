@@ -18,18 +18,16 @@ srv.listen(1)
 srv.settimeout(30)
 
 try:
-    conn, addr = srv.accept()
+    conn, _ = srv.accept()
     conn.settimeout(5)
-    data, key = read_http_upgrade(conn)
+    _, key = read_http_upgrade(conn)
     if key is None:
-        conn.close(); srv.close(); sys.exit(0)
+        raise ConnectionError("missing WebSocket upgrade key")
     conn.sendall(make_101(key))
     time.sleep(0.5)
     # Graceful TCP close without sending WS Close frame
     conn.shutdown(socket.SHUT_WR)
     time.sleep(0.5)
     conn.close()
-except socket.timeout:
-    pass
 finally:
     srv.close()

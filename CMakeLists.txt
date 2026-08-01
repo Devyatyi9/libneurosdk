@@ -113,7 +113,7 @@ if(NEURO_BUILD_TESTS)
 	endforeach()
 
 	# Network I/O test clients (link against neurosdk)
-	set(NET_TESTS test_partial_send test_flood test_double_close test_oversize proxy_test test_large_frame test_peer_close)
+	set(NET_TESTS test_partial_send test_flood test_double_close test_oversize proxy_test test_large_frame test_peer_close test_negative)
 	foreach(t ${NET_TESTS})
 		add_executable(${t} tests/network/${t}.c)
 		target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
