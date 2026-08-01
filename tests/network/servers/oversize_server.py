@@ -1,17 +1,15 @@
-"""TCP server that sends a WS frame exceeding the client's recv buffer.
-
-Tests #20: the client streams frames larger than WS_RECV_BUF_SIZE
-(262144 bytes) instead of overflowing — Autobahn 9.x requires large
-payloads to be delivered whole.
-"""
-import os, socket, struct, time, sys
+"""Send and validate a clean lifecycle for one 300000-byte text frame."""
+import os
+import socket
+import struct
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ws_frame import read_http_upgrade, make_101
+from ws_frame import build_close, make_101, read_client_frame, read_http_upgrade
 
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 19008
-OVERSIZE = 300000  # > WS_RECV_BUF_SIZE (262144)
+PAYLOAD = b"X" * 300000
 
 srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -20,32 +18,16 @@ srv.listen(1)
 srv.settimeout(30)
 
 try:
-    conn, addr = srv.accept()
+    conn, _ = srv.accept()
     conn.settimeout(10)
-    data, key = read_http_upgrade(conn)
-    if key is None:
-        conn.close(); srv.close(); sys.exit(0)
+    _, key = read_http_upgrade(conn)
     conn.sendall(make_101(key))
-    time.sleep(0.1)
-    # Build oversized frame (FIN + text, no mask since server->client)
-    frame = bytearray()
-    frame.append(0x81)  # FIN + text
-    if OVERSIZE < 65536:
-        frame.append(126)
-        frame.extend(struct.pack(">H", OVERSIZE))
-    else:
-        frame.append(127)
-        frame.extend(struct.pack(">Q", OVERSIZE))
-    # Send the header but NOT the full payload — just enough to trigger detection
-    conn.sendall(bytes(frame))
-    # Send a chunk of payload, then stop — client should reject before reading all
-    chunk_size = min(OVERSIZE, 300000)
-    conn.sendall(b"X" * chunk_size)
-    time.sleep(2)
+    conn.sendall(b"\x81\x7f" + struct.pack(">Q", len(PAYLOAD)) + PAYLOAD)
+    conn.sendall(build_close())
+
+    fin, opcode, payload = read_client_frame(conn)
+    if not fin or opcode != 0x8 or payload != b"\x03\xe8":
+        raise ConnectionError("expected masked Close response with code 1000")
     conn.close()
-except socket.timeout:
-    pass
-except BrokenPipeError:
-    pass
 finally:
     srv.close()

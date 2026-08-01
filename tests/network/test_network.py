@@ -286,7 +286,7 @@ def test_20_oversize():
     client_bin = _find_binary("test_oversize")
     assert client_bin, "test_oversize binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
-    srv.terminate(); srv.wait()
+    _wait_server(srv, "oversize_server.py")
     assert rc == 0, f"oversize test failed (exit {rc})"
 
 
