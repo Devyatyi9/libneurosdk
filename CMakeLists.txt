@@ -86,21 +86,23 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/neurosdk.h
 )
 
 if(NEURO_BUILD_TESTS)
+	add_library(ws_client_test STATIC src/ws_client.c)
+	target_include_directories(ws_client_test PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+	if(WIN32)
+		target_link_libraries(ws_client_test PUBLIC ws2_32 bcrypt)
+	endif()
+
 	add_executable(echo_test tests/integration/echo_test.c)
-	target_include_directories(echo_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-	target_link_libraries(echo_test PRIVATE ${PROJECT_NAME})
+	target_link_libraries(echo_test PRIVATE ws_client_test)
 
 	add_executable(integration_test tests/integration/integration_test.c)
-	target_include_directories(integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-	target_link_libraries(integration_test PRIVATE ${PROJECT_NAME})
+	target_link_libraries(integration_test PRIVATE ws_client_test)
 
 	add_executable(fuzzing_client tests/autobahn/fuzzing_client.c)
-	target_include_directories(fuzzing_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-	target_link_libraries(fuzzing_client PRIVATE ${PROJECT_NAME})
+	target_link_libraries(fuzzing_client PRIVATE ws_client_test)
 	
 	add_executable(long_session tests/perf/long_session.c)
-	target_include_directories(long_session PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-	target_link_libraries(long_session PRIVATE ${PROJECT_NAME})
+	target_link_libraries(long_session PRIVATE ws_client_test)
 
 	# Unit tests (include ws_client.c directly for static function access)
 	set(UNIT_TESTS test_url test_sha1 test_base64 test_frame)
@@ -112,12 +114,11 @@ if(NEURO_BUILD_TESTS)
 		endif()
 	endforeach()
 
-	# Network I/O test clients (link against neurosdk)
+	# Network I/O test clients exercise ws_client directly.
 	set(NET_TESTS test_partial_send test_flood test_double_close test_oversize proxy_test test_large_frame test_peer_close test_negative)
 	foreach(t ${NET_TESTS})
 		add_executable(${t} tests/network/${t}.c)
-		target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-		target_link_libraries(${t} PRIVATE ${PROJECT_NAME})
+		target_link_libraries(${t} PRIVATE ws_client_test)
 	endforeach()
 endif()
 
