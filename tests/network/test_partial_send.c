@@ -3,7 +3,10 @@
 #include <string.h>
 #include "ws_client.h"
 #ifdef _WIN32
+#pragma warning(push)
+#pragma warning(disable : 5105)
 #include <windows.h>
+#pragma warning(pop)
 #define SLEEP_MS(x) Sleep(x)
 #else
 #include <unistd.h>
