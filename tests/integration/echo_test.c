@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,16 +9,24 @@
 #pragma warning(disable : 5105)
 #include <windows.h>
 #pragma warning(pop)
-#define SLEEP_MS(x) Sleep(x)
+static uint64_t now_ms(void) {
+	return (uint64_t)GetTickCount64();
+}
 #else
-#include <unistd.h>
-#define SLEEP_MS(x) usleep((x) * 1000)
+#include <time.h>
+static uint64_t now_ms(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
 #endif
 
 static int connected = 0;
-static int got_message = 0;
 static int got_close = 0;
 static int got_error = 0;
+static uint16_t close_code = 0;
+static size_t message_count = 0;
+static int payload_ok = 1;
 static char const *expected_message = "Hello, WebSocket!";
 
 static void on_open(ws_t *ws, void *userdata) {
@@ -34,14 +43,13 @@ static void on_message(ws_t *ws,
                        void *userdata) {
 	(void)ws;
 	(void)userdata;
+	message_count++;
 	printf("[message] %s%.*s\n", binary ? "BINARY " : "", (int)len, data);
 	if (binary || len != strlen(expected_message) ||
 	    memcmp(data, expected_message, len) != 0) {
 		fprintf(stderr, "unexpected echo payload\n");
-		got_error = 1;
-		return;
+		payload_ok = 0;
 	}
-	got_message = 1;
 }
 
 static void on_close(ws_t *ws,
@@ -52,6 +60,7 @@ static void on_close(ws_t *ws,
 	(void)ws;
 	(void)userdata;
 	printf("[close] code=%u reason=%.*s\n", code, (int)reason_len, reason);
+	close_code = code;
 	got_close = 1;
 }
 
@@ -81,11 +90,9 @@ int main(int argc, char *argv[]) {
 	}
 	printf("[info] Connecting to %s ...\n", url);
 
-	/* Wait for connection (max 10s) */
-	int timeout = 100; /* 100ms per poll, 100 iterations = 10s */
-	while (!connected && !got_error && timeout-- > 0) {
+	uint64_t deadline = now_ms() + 10000;
+	while (!connected && !got_error && now_ms() < deadline)
 		ws_poll(ws, 100);
-	}
 	if (got_error) {
 		ws_destroy(ws);
 		return 1;
@@ -105,26 +112,29 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	/* Wait for echo (max 10s) */
-	timeout = 100;
-	while (!got_message && !got_close && !got_error && timeout-- > 0) {
+	deadline = now_ms() + 10000;
+	while (message_count == 0 && !got_close && !got_error && now_ms() < deadline)
 		ws_poll(ws, 100);
-	}
-	if (!got_message && !got_error) {
-		fprintf(stderr, "timeout waiting for echo\n");
-	}
 
-	if (got_message) {
-		printf("[pass] Echo received successfully\n");
-	} else if (got_error) {
-		fprintf(stderr, "[fail] Error during test\n");
-	}
-
-	ws_close(ws);
-	/* Let CLOSING handshake complete */
-	for (int i = 0; i < 10 && ws_state(ws) == WS_STATE_CLOSING; i++)
+	if (ws_state(ws) == WS_STATE_OPEN)
+		ws_close(ws);
+	deadline = now_ms() + 10000;
+	while (!got_close && !got_error && now_ms() < deadline)
 		ws_poll(ws, 100);
+
+	ws_state_e final_state = ws_state(ws);
+	int fail = got_error || !connected || message_count != 1 || !payload_ok ||
+	           !got_close || close_code != 1000 || final_state != WS_STATE_CLOSED;
+	if (fail) {
+		fprintf(stderr,
+		        "[fail] connected=%d messages=%zu payload_ok=%d close=%d "
+		        "close_code=%u error=%d state=%d\n",
+		        connected, message_count, payload_ok, got_close, close_code,
+		        got_error, (int)final_state);
+	} else {
+		printf("[pass] Echo and clean Close completed successfully\n");
+	}
 
 	ws_destroy(ws);
-	return (got_message && !got_error) ? 0 : 1;
+	return fail ? 1 : 0;
 }
