@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,10 +9,16 @@
 #pragma warning(disable : 5105)
 #include <windows.h>
 #pragma warning(pop)
-#define SLEEP_MS(x) Sleep(x)
+static uint64_t now_ms(void) {
+	return (uint64_t)GetTickCount64();
+}
 #else
-#include <unistd.h>
-#define SLEEP_MS(x) usleep((x) * 1000)
+#include <time.h>
+static uint64_t now_ms(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
 #endif
 
 static int total, passed, failed;
@@ -34,7 +41,9 @@ typedef struct {
 	int binary;
 } test_ctx_t;
 
-static int test_connected, test_got_msg, test_got_close, test_got_error;
+static int test_connected, test_got_close, test_got_error;
+static uint16_t test_close_code;
+static size_t test_message_count;
 
 static void t_on_open(ws_t *ws, void *userdata) {
 	(void)ws;
@@ -49,6 +58,7 @@ static void t_on_message(ws_t *ws,
                          void *userdata) {
 	(void)ws;
 	test_ctx_t *ctx = (test_ctx_t *)userdata;
+	test_message_count++;
 	if (binary != ctx->binary) {
 		fprintf(stderr, "  type mismatch\n");
 		test_got_error = 1;
@@ -59,7 +69,6 @@ static void t_on_message(ws_t *ws,
 		test_got_error = 1;
 		return;
 	}
-	test_got_msg = 1;
 }
 
 static void t_on_close(ws_t *ws,
@@ -72,6 +81,7 @@ static void t_on_close(ws_t *ws,
 	(void)reason_len;
 	(void)userdata;
 	fprintf(stderr, "  close code=%u\n", code);
+	test_close_code = code;
 	test_got_close = 1;
 }
 
@@ -87,11 +97,11 @@ static int run_one(char const *url,
                    size_t len,
                    int binary) {
 	test_connected = 0;
-	test_got_msg = 0;
 	test_got_close = 0;
 	test_got_error = 0;
+	test_close_code = 0;
+	test_message_count = 0;
 	test_ctx_t ctx = {payload, len, binary};
-	int timeout;
 
 	ws_callbacks_t cbs = {t_on_open, t_on_message, t_on_close, t_on_error, &ctx};
 
@@ -99,11 +109,12 @@ static int run_one(char const *url,
 	if (ws_connect(&ws, url, cbs) != 0)
 		return -1;
 
-	timeout = 100;
-	while (!test_connected && !test_got_error && timeout-- > 0)
+	uint64_t deadline = now_ms() + 10000;
+	while (!test_connected && !test_got_error && now_ms() < deadline)
 		ws_poll(ws, 100);
-	if (!test_connected) {
-		fprintf(stderr, "  timeout waiting for connect\n");
+	if (!test_connected || test_got_error) {
+		fprintf(stderr, "  %s waiting for connect\n",
+		        test_got_error ? "error" : "timeout");
 		ws_destroy(ws);
 		return -1;
 	}
@@ -115,20 +126,28 @@ static int run_one(char const *url,
 		return -1;
 	}
 
-	timeout = 100;
-	while (!test_got_msg && !test_got_close && !test_got_error && timeout-- > 0)
+	deadline = now_ms() + 10000;
+	while (test_message_count == 0 && !test_got_close && !test_got_error &&
+	       now_ms() < deadline)
 		ws_poll(ws, 100);
-	if (!test_got_msg) {
-		fprintf(stderr, "  timeout waiting for echo\n");
-		ws_destroy(ws);
-		return -1;
-	}
 
-	ws_close(ws);
-	for (int i = 0; i < 10 && ws_state(ws) == WS_STATE_CLOSING; i++)
+	if (ws_state(ws) == WS_STATE_OPEN)
+		ws_close(ws);
+	deadline = now_ms() + 10000;
+	while (!test_got_close && !test_got_error && now_ms() < deadline)
 		ws_poll(ws, 100);
+
+	ws_state_e final_state = ws_state(ws);
+	int fail = test_got_error || test_message_count != 1 || !test_got_close ||
+	           test_close_code != 1000 || final_state != WS_STATE_CLOSED;
+	if (fail)
+		fprintf(stderr,
+		        "  connected=%d messages=%zu close=%d close_code=%u error=%d "
+		        "state=%d\n",
+		        test_connected, test_message_count, test_got_close, test_close_code,
+		        test_got_error, (int)final_state);
 	ws_destroy(ws);
-	return 0;
+	return fail ? -1 : 0;
 }
 
 int main(int argc, char *argv[]) {
