@@ -18,6 +18,7 @@ static int connected = 0;
 static int got_message = 0;
 static int got_close = 0;
 static int got_error = 0;
+static char const *expected_message = "Hello, WebSocket!";
 
 static void on_open(ws_t *ws, void *userdata) {
 	(void)ws;
@@ -34,6 +35,12 @@ static void on_message(ws_t *ws,
 	(void)ws;
 	(void)userdata;
 	printf("[message] %s%.*s\n", binary ? "BINARY " : "", (int)len, data);
+	if (binary || len != strlen(expected_message) ||
+	    memcmp(data, expected_message, len) != 0) {
+		fprintf(stderr, "unexpected echo payload\n");
+		got_error = 1;
+		return;
+	}
 	got_message = 1;
 }
 
@@ -57,6 +64,8 @@ static void on_error(ws_t *ws, char const *msg, void *userdata) {
 
 int main(int argc, char *argv[]) {
 	char const *url = argc > 1 ? argv[1] : "ws://localhost:9001/";
+	if (argc > 2)
+		expected_message = argv[2];
 
 	ws_callbacks_t callbacks = {
 	    .on_open = on_open,

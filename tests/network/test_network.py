@@ -25,8 +25,12 @@ def _find_binary(name):
 
 def _start_server(script, port, *args):
     cmd = [sys.executable, os.path.join(SERVERS_DIR, script), str(port)] + list(args)
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            text=True)
     time.sleep(2)
+    if proc.poll() is not None:
+        stderr = proc.stderr.read()
+        pytest.fail(f"{script} exited during startup ({proc.returncode}):\n{stderr}")
     return proc
 
 
@@ -45,7 +49,21 @@ def _wait_port(port, timeout=10):
 
 
 def _run_client(bin_path, url, *extra_args):
-    return subprocess.call([bin_path, url] + list(extra_args), env=build_env(bin_path))
+    try:
+        return subprocess.run([bin_path, url] + list(extra_args),
+                              env=build_env(bin_path), timeout=120).returncode
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"client timed out after 120s: {os.path.basename(bin_path)}")
+
+
+def _wait_server(proc, name, timeout=10):
+    try:
+        _, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        _, stderr = proc.communicate(timeout=5)
+        pytest.fail(f"{name} did not exit after the client finished:\n{stderr}")
+    assert proc.returncode == 0, f"{name} failed (exit {proc.returncode}):\n{stderr}"
 
 
 # ---- Sanity Checks (#5-#7) ----
@@ -129,7 +147,7 @@ def test_9_partial_send():
     client_bin = _find_binary("test_partial_send")
     assert client_bin, "test_partial_send binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
-    srv.terminate(); srv.wait()
+    _wait_server(srv, "slow_consumer_server.py")
     assert rc == 0, f"partial_send test failed (exit {rc})"
 
 
@@ -215,7 +233,7 @@ def test_16_flood():
     client_bin = _find_binary("test_flood")
     assert client_bin, "test_flood binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
-    srv.terminate(); srv.wait()
+    _wait_server(srv, "flood_server.py")
     assert rc == 0, f"flood test failed (exit {rc})"
 
 
@@ -235,8 +253,9 @@ def test_18_ping_interleave():
     port = 19111
     srv = _start_server("ping_interleave_server.py", port)
     echo_bin = find_echo_test()
-    rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
-    srv.terminate(); srv.wait()
+    expected = "Hello, this is the first part and this is the second part!"
+    rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/", expected)
+    _wait_server(srv, "ping_interleave_server.py")
     assert rc == 0, f"ping_interleave test failed (exit {rc})"
 
 

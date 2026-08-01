@@ -85,3 +85,39 @@ def read_http_upgrade(conn):
         if line.lower().startswith(b"sec-websocket-key:"):
             key = line.split(b":", 1)[1].strip().decode()
     return data, key
+
+
+def recv_exact(conn, size):
+    """Read exactly size bytes or fail on premature EOF."""
+    data = bytearray()
+    while len(data) < size:
+        chunk = conn.recv(size - len(data))
+        if not chunk:
+            raise ConnectionError("connection closed during WebSocket frame")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def read_client_frame(conn):
+    """Read and unmask one complete client frame."""
+    head = recv_exact(conn, 2)
+    fin = bool(head[0] & 0x80)
+    rsv = head[0] & 0x70
+    opcode = head[0] & 0x0f
+    masked = bool(head[1] & 0x80)
+    length = head[1] & 0x7f
+    if rsv:
+        raise ConnectionError("client frame has non-zero RSV bits")
+    if not masked:
+        raise ConnectionError("client frame is not masked")
+    if length == 126:
+        length = struct.unpack(">H", recv_exact(conn, 2))[0]
+    elif length == 127:
+        length = struct.unpack(">Q", recv_exact(conn, 8))[0]
+        if length >> 63:
+            raise ConnectionError("client frame has invalid 64-bit length")
+    mask = recv_exact(conn, 4)
+    payload = bytearray(recv_exact(conn, length))
+    for i in range(length):
+        payload[i] ^= mask[i & 3]
+    return fin, opcode, bytes(payload)

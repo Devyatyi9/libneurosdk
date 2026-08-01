@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "ws_client.h"
 #ifdef _WIN32
 #include <windows.h>
@@ -13,6 +14,8 @@ static int s_connected = 0;
 static int s_done = 0;
 static long s_msg_count = 0;
 static long s_expected = 1000;
+static int s_failed = 0;
+static int s_closed = 0;
 
 static void on_open(ws_t *ws, void *userdata) {
 	(void)ws;
@@ -26,10 +29,17 @@ static void on_message(ws_t *ws,
                        int binary,
                        void *userdata) {
 	(void)ws;
-	(void)data;
-	(void)len;
-	(void)binary;
 	(void)userdata;
+	char expected[32];
+	int expected_len =
+	    snprintf(expected, sizeof(expected), "msg%ld", s_msg_count);
+	if (binary || expected_len < 0 || len != (size_t)expected_len ||
+	    memcmp(data, expected, len) != 0) {
+		fprintf(stderr, "FAIL: invalid message at index %ld\n", s_msg_count);
+		s_failed = 1;
+		s_done = 1;
+		return;
+	}
 	s_msg_count++;
 }
 
@@ -39,10 +49,12 @@ static void on_close(ws_t *ws,
                      size_t reason_len,
                      void *userdata) {
 	(void)ws;
-	(void)code;
 	(void)reason;
 	(void)reason_len;
 	(void)userdata;
+	if (code != 1000)
+		s_failed = 1;
+	s_closed = 1;
 	s_done = 1;
 }
 
@@ -50,6 +62,7 @@ static void on_error(ws_t *ws, char const *msg, void *userdata) {
 	(void)ws;
 	(void)userdata;
 	fprintf(stderr, "FAIL: error: %s\n", msg);
+	s_failed = 1;
 	s_done = 1;
 }
 
@@ -63,7 +76,7 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "FAIL: ws_connect\n");
 		return 1;
 	}
-	int budget = 3000;
+	int budget = 600;
 	while (!s_done && budget > 0) {
 		ws_poll(ws, 100);
 		budget--;
@@ -73,7 +86,7 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "FAIL: never connected\n");
 		return 1;
 	}
-	if (s_msg_count < s_expected) {
+	if (s_failed || !s_closed || s_msg_count != s_expected) {
 		fprintf(stderr, "FAIL: got %ld msgs, expected %ld\n", s_msg_count,
 		        s_expected);
 		return 1;

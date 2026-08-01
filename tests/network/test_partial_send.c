@@ -15,6 +15,7 @@ static int s_got_reply = 0;
 static int s_failed =
     0; /* only set on on_error — real protocol/network failure */
 static int s_done = 0;
+static int s_closed = 0;
 
 static void on_open(ws_t *ws, void *userdata) {
 	(void)userdata;
@@ -31,13 +32,9 @@ static void on_open(ws_t *ws, void *userdata) {
 	int rc = ws_send(ws, big, size);
 	free(big);
 	if (rc != 0) {
-		/* Expected on platforms with small kernel send buffers: sock_send_all()
-		 * can't push 10MB against a slow consumer and times out. Not a failure
-		 * by itself — the test's real assertion is that the WS stream stays in
-		 * sync (no desync) and the server's reply still arrives intact. */
-		fprintf(stderr,
-		        "info: ws_send incomplete (rc=%d) — expected with slow consumer\n",
-		        rc);
+		fprintf(stderr, "FAIL: ws_send returned %d\n", rc);
+		s_failed = 1;
+		s_done = 1;
 	}
 }
 
@@ -47,13 +44,15 @@ static void on_message(ws_t *ws,
                        int binary,
                        void *userdata) {
 	(void)ws;
-	(void)data;
-	(void)binary;
 	(void)userdata;
-	/* The slow-consumer server sends a fixed small "Hello" by design — it
-	 * does NOT echo the 10MB back. Its arrival proves the WS stream stayed
-	 * intact (correctly framed) through the huge partial send. */
-	printf("info: server replied with %zu-byte message\n", len);
+	static char const expected[] = "partial-send-ok";
+	if (binary || len != sizeof(expected) - 1 ||
+	    memcmp(data, expected, sizeof(expected) - 1) != 0) {
+		fprintf(stderr, "FAIL: invalid partial-send acknowledgement\n");
+		s_failed = 1;
+		s_done = 1;
+		return;
+	}
 	s_got_reply = 1;
 	ws_close(ws);
 }
@@ -64,10 +63,12 @@ static void on_close(ws_t *ws,
                      size_t reason_len,
                      void *userdata) {
 	(void)ws;
-	(void)code;
 	(void)reason;
 	(void)reason_len;
 	(void)userdata;
+	if (code != 1000)
+		s_failed = 1;
+	s_closed = 1;
 	s_done = 1;
 }
 
@@ -87,7 +88,7 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "FAIL: ws_connect\n");
 		return 1;
 	}
-	int budget = 6000;
+	int budget = 600;
 	while (!s_done && budget > 0) {
 		ws_poll(ws, 100);
 		budget--;
@@ -104,11 +105,13 @@ int main(int argc, char *argv[]) {
 		        "FAIL: server reply never arrived (stream likely desynced)\n");
 		return 1;
 	}
+	if (!s_closed) {
+		fprintf(stderr, "FAIL: clean close did not complete\n");
+		return 1;
+	}
 	if (budget <= 0 && !s_done) {
 		fprintf(stderr, "FAIL: timed out waiting for server response\n");
 		return 1;
 	}
-	/* Pass: the 10MB (partial) send did not desync the stream — the server's
-	 * reply arrived as a correctly-framed message and no on_error fired. */
 	return 0;
 }
