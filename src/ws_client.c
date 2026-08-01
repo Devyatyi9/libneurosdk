@@ -1546,8 +1546,11 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 			 * the ~200-byte response is fully assembled. */
 			int elapsed_ms = 0;
 			int poll_interval = 10; /* small steps so the overall budget
-			                         * is a good approximation of real time
-			                         * rather than pure iteration count */
+
+			                           * is a good approximation of real time
+
+			                           * rather than pure iteration count */
+			int peer_eof = 0;
 			for (;;) {
 				if (ws->recv_len >= WS_RECV_BUF_SIZE) {
 					ws->state = WS_STATE_ERROR;
@@ -1599,10 +1602,8 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 						return WS_EVENT_ERROR;
 					}
 					if (n == 0) {
-						ws->state = WS_STATE_CLOSED;
-						if (ws->callbacks.on_close)
-							ws->callbacks.on_close(ws, 1006, "", 0, ws->callbacks.userdata);
-						return WS_EVENT_CLOSE;
+						peer_eof = 1;
+						break;
 					}
 					ws->recv_len += (size_t)n;
 				}
@@ -1634,6 +1635,12 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 					if (ws->callbacks.on_open)
 						ws->callbacks.on_open(ws, ws->callbacks.userdata);
 					return WS_EVENT_OPEN;
+				}
+				if (peer_eof) {
+					ws->state = WS_STATE_CLOSED;
+					if (ws->callbacks.on_close)
+						ws->callbacks.on_close(ws, 1006, "", 0, ws->callbacks.userdata);
+					return WS_EVENT_CLOSE;
 				}
 				/* up == 0: need more data, loop back to select() */
 			}
