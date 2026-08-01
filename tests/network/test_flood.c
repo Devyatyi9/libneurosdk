@@ -4,10 +4,16 @@
 #include "ws_client.h"
 #ifdef _WIN32
 #include <windows.h>
-#define SLEEP_MS(x) Sleep(x)
+static uint64_t now_ms(void) {
+	return (uint64_t)GetTickCount64();
+}
 #else
-#include <unistd.h>
-#define SLEEP_MS(x) usleep((x) * 1000)
+#include <time.h>
+static uint64_t now_ms(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
 #endif
 
 static int s_connected = 0;
@@ -76,10 +82,9 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "FAIL: ws_connect\n");
 		return 1;
 	}
-	int budget = 600;
-	while (!s_done && budget > 0) {
+	uint64_t deadline = now_ms() + 30000;
+	while (!s_done && now_ms() < deadline) {
 		ws_poll(ws, 100);
-		budget--;
 	}
 	ws_destroy(ws);
 	if (!s_connected) {
@@ -87,8 +92,8 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 	if (s_failed || !s_closed || s_msg_count != s_expected) {
-		fprintf(stderr, "FAIL: got %ld msgs, expected %ld\n", s_msg_count,
-		        s_expected);
+		fprintf(stderr, "FAIL: got %ld msgs, expected %ld, closed=%d, timeout=%d\n",
+		        s_msg_count, s_expected, s_closed, now_ms() >= deadline);
 		return 1;
 	}
 	printf("OK: %ld messages received\n", s_msg_count);
