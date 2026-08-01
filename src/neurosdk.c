@@ -34,6 +34,26 @@
 #define ENVIRONMENT_VARIABLE_NAME "NEURO_SDK_WS_URL"
 #define MESSAGE_QUEUE_SIZE 10
 
+static char const *neurosdk_getenv(char const *name) {
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+	char const *value = getenv(name);
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+	return value;
+}
+
+static char *duplicate_string(char const *value) {
+	size_t size = strlen(value) + 1;
+	char *copy = malloc(size);
+	if (copy)
+		memcpy(copy, value, size);
+	return copy;
+}
+
 #ifndef LIB_VERSION
 #error "LIB_VERSION is not defined!"
 #endif
@@ -74,6 +94,7 @@
 static void default_logger(neurosdk_severity_e severity,
                            char *message,
                            void *user_data) {
+	(void)user_data;
 #ifdef _WIN32
 	HANDLE h_console = GetStdHandle(STD_OUTPUT_HANDLE);
 
@@ -145,6 +166,7 @@ typedef struct context {
 } context_t;
 
 static char *escape_string(char const *str) {
+	static char const hex[] = "0123456789ABCDEF";
 	if (!str)
 		return NULL;
 
@@ -182,7 +204,11 @@ static char *escape_string(char const *str) {
 				break;
 			default:
 				if ((unsigned char)*str < 32 || (unsigned char)*str > 126) {
-					dst += sprintf(dst, "\\x%02X", (unsigned char)*str);
+					unsigned char value = (unsigned char)*str;
+					*dst++ = '\\';
+					*dst++ = 'x';
+					*dst++ = hex[value >> 4];
+					*dst++ = hex[value & 0x0F];
 				} else {
 					*dst++ = *str;
 				}
@@ -350,7 +376,7 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 							goto parse_cleanup;
 						}
 						json_string_t *str = (json_string_t *)obj_root->value->payload;
-						id = strdup(str->string);
+						id = duplicate_string(str->string);
 					} else if (!strcmp(obj_root->name->string, "name")) {
 						if (obj_root->value->type != json_type_string) {
 							LOG_ERROR(ctx, "[parse_s2c_json] 'name' field must be a string.");
@@ -358,13 +384,13 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 							goto parse_cleanup;
 						}
 						json_string_t *str = (json_string_t *)obj_root->value->payload;
-						name = strdup(str->string);
+						name = duplicate_string(str->string);
 					} else if (!strcmp(obj_root->name->string, "data")) {
 						if (obj_root->value->type == json_type_null) {
 							data = NULL;
 						} else if (obj_root->value->type == json_type_string) {
 							json_string_t *str = (json_string_t *)obj_root->value->payload;
-							data = strdup(str->string);
+							data = duplicate_string(str->string);
 						} else {
 							LOG_ERROR(
 							    ctx,
@@ -413,6 +439,7 @@ cleanup:
 }
 
 static void ws_on_open(ws_t *ws, void *userdata) {
+	(void)ws;
 	context_t *ctx = (context_t *)userdata;
 	LOG_INFO(ctx, "WebSocket connection opened successfully.");
 	ctx->connected = true;
@@ -423,6 +450,7 @@ static void ws_on_message(ws_t *ws,
                           size_t len,
                           int binary,
                           void *userdata) {
+	(void)ws;
 	context_t *ctx = (context_t *)userdata;
 
 	if (binary) {
@@ -455,6 +483,7 @@ static void ws_on_close(ws_t *ws,
                         char const *reason,
                         size_t reason_len,
                         void *userdata) {
+	(void)ws;
 	context_t *ctx = (context_t *)userdata;
 	LOG_WARN(ctx,
 	         "Connection closed (code=%u, reason=%.*s). Marking as "
@@ -464,6 +493,7 @@ static void ws_on_close(ws_t *ws,
 }
 
 static void ws_on_error(ws_t *ws, char const *msg, void *userdata) {
+	(void)ws;
 	context_t *ctx = (context_t *)userdata;
 	LOG_WARN(ctx, "WebSocket error: %s", msg);
 	ctx->connected = false;
@@ -512,9 +542,9 @@ neurosdk_context_create(neurosdk_context_t *ctx,
 		return NeuroSDK_OutOfMemory;
 	}
 
-	char *fetched_url = (char *)desc->url;
+	char const *fetched_url = desc->url;
 	if (!fetched_url) {
-		fetched_url = getenv(ENVIRONMENT_VARIABLE_NAME);
+		fetched_url = neurosdk_getenv(ENVIRONMENT_VARIABLE_NAME);
 	}
 	if (!fetched_url) {
 		res = NeuroSDK_NoURL;
@@ -651,8 +681,9 @@ static void make_array(char **strings, int count, OUT char **json_str) {
 	*dst++ = '[';
 	for (int i = 0; i < count; i++) {
 		*dst++ = '"';
-		strcpy(dst, strings[i]);
-		dst += strlen(strings[i]);
+		size_t len = strlen(strings[i]);
+		memcpy(dst, strings[i], len);
+		dst += len;
 		*dst++ = '"';
 		if (i < count - 1) {
 			*dst++ = ',';
@@ -868,7 +899,7 @@ neurosdk_context_send(neurosdk_context_t *ctx, neurosdk_message_t *msg) {
 				free(escaped);
 				state = temp;
 			} else {
-				state = strdup("null");
+				state = duplicate_string("null");
 				if (!state) {
 					LOG_ERROR(context, "Out of memory setting default state to null.");
 					return NeuroSDK_OutOfMemory;

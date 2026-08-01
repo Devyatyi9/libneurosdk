@@ -127,8 +127,8 @@ int main(void) {
 			neurosdk_message_t force_msg;
 			force_msg.kind = NeuroSDK_MessageKind_ActionsForce;
 			char board_str[9 + 4];
-			sprintf(board_str, "%.*s\n%.*s\n%.*s", 3, board, 3, board + 3, 3,
-			        board + 6);
+			snprintf(board_str, sizeof(board_str), "%.*s\n%.*s\n%.*s", 3, board, 3,
+			         board + 3, 3, board + 6);
 			force_msg.value.actions_force.state = board_str;
 			force_msg.value.actions_force.query =
 			    "Your move. Choose an empty cell index (0-8).";

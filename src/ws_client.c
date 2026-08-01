@@ -457,6 +457,18 @@ static int generate_key(char *out, size_t size) {
 	return (int)strlen(out);
 }
 
+static char const *ws_getenv(char const *name) {
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+	char const *value = getenv(name);
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+	return value;
+}
+
 /* ================================================================== */
 /*  SHA-1 (FIPS 180-4) — vendored, minimal, no external deps           */
 /* ================================================================== */
@@ -641,7 +653,7 @@ static int parse_proxy_url(char const *proxy,
 		*auth = (char *)malloc(strlen(b64) + 1);
 		if (!*auth)
 			return -1;
-		strcpy(*auth, b64);
+		memcpy(*auth, b64, strlen(b64) + 1);
 		p = at + 1;
 	}
 
@@ -960,17 +972,17 @@ int ws_connect_via_proxy(ws_t **out,
 	 * HTTP_PROXY then ALL_PROXY, honouring NO_PROXY. */
 	char const *env_px = NULL;
 	if (proxy == NULL || *proxy == '\0') {
-		char const *np = getenv("NO_PROXY");
+		char const *np = ws_getenv("NO_PROXY");
 		if (!np || !*np)
-			np = getenv("no_proxy");
+			np = ws_getenv("no_proxy");
 		if (!np || !no_proxy_match(np, ws->host)) {
-			env_px = getenv("HTTP_PROXY");
+			env_px = ws_getenv("HTTP_PROXY");
 			if (!env_px || !*env_px)
-				env_px = getenv("http_proxy");
+				env_px = ws_getenv("http_proxy");
 			if (!env_px || !*env_px)
-				env_px = getenv("ALL_PROXY");
+				env_px = ws_getenv("ALL_PROXY");
 			if (!env_px || !*env_px)
-				env_px = getenv("all_proxy");
+				env_px = ws_getenv("all_proxy");
 			if (env_px && *env_px == '\0')
 				env_px = NULL;
 		}
