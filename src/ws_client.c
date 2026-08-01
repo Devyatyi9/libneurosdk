@@ -1,6 +1,7 @@
 #include "ws_client.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -327,17 +328,35 @@ static int sock_resolve(char const *host,
 /* ================================================================== */
 /*  CSPRNG — replaces rand() for masking keys and Sec-WebSocket-Key    */
 /* ================================================================== */
-static void ws_random_bytes(unsigned char *buf, size_t len) {
+static int ws_random_bytes(unsigned char *buf, size_t len) {
 #if defined(_WIN32)
-	BCryptGenRandom(NULL, buf, (ULONG)len, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+	if (len > ULONG_MAX)
+		return -1;
+	return BCryptGenRandom(NULL, buf, (ULONG)len,
+	                       BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0
+	           ? 0
+	           : -1;
 #elif defined(__linux__)
-	getrandom(buf, len, 0);
+	size_t offset = 0;
+	while (offset < len) {
+		ssize_t rc = getrandom(buf + offset, len - offset, 0);
+		if (rc > 0) {
+			offset += (size_t)rc;
+			continue;
+		}
+		if (rc < 0 && errno == EINTR)
+			continue;
+		return -1;
+	}
+	return 0;
 #elif defined(__APPLE__)
 	arc4random_buf(buf, len);
+	return 0;
 #else
 	/* Fallback for unsupported POSIX platforms */
 	for (size_t i = 0; i < len; i++)
 		buf[i] = (unsigned char)(rand() & 0xff);
+	return 0;
 #endif
 }
 
@@ -452,7 +471,8 @@ static int build_upgrade_request(char *buf,
 
 static int generate_key(char *out, size_t size) {
 	unsigned char nonce[16];
-	ws_random_bytes(nonce, 16);
+	if (ws_random_bytes(nonce, sizeof(nonce)) != 0)
+		return -1;
 	base64_encode(nonce, 16, out, size);
 	return (int)strlen(out);
 }
@@ -1063,7 +1083,10 @@ static int ws_send_data_frame(ws_t *ws,
 	size_t hlen = ws_build_frame_header(frame, opcode, 1, len);
 
 	unsigned char mask[4];
-	ws_random_bytes(mask, 4);
+	if (ws_random_bytes(mask, sizeof(mask)) != 0) {
+		free(frame);
+		return -1;
+	}
 	memcpy(frame + hlen, mask, sizeof(mask));
 	ws_apply_mask((unsigned char const *)data, len, mask,
 	              frame + hlen + sizeof(mask));
@@ -1125,19 +1148,22 @@ static int ws_utf8_valid(unsigned char const *s, size_t len) {
 
 /* Helper to build a masked Close or Pong response and send it.
  * Called when we need to reply to a received control frame. */
-static void ws_send_control(ws_t *ws,
-                            unsigned char opcode,
-                            unsigned char const *payload,
-                            size_t payload_len) {
+static int ws_send_control(ws_t *ws,
+                           unsigned char opcode,
+                           unsigned char const *payload,
+                           size_t payload_len) {
 	unsigned char frame[131] = {opcode, 0x80};
 	unsigned char mask[4];
 	if (payload_len > 125)
 		payload_len = 125;
 	frame[1] |= (unsigned char)payload_len;
-	ws_random_bytes(mask, 4);
+	if (ws_random_bytes(mask, sizeof(mask)) != 0)
+		return -1;
 	memcpy(frame + 2, mask, sizeof(mask));
 	ws_apply_mask(payload, payload_len, mask, frame + 6);
-	sock_send_all(ws->fd, frame, 6 + payload_len);
+	return sock_send_all(ws->fd, frame, 6 + payload_len) == (int)(6 + payload_len)
+	           ? 0
+	           : -1;
 }
 
 /* Begin streaming a data frame whose payload is too large to fit in the
@@ -1514,7 +1540,13 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 					return WS_EVENT_NONE; /* still connecting */
 
 				char key[32];
-				generate_key(key, sizeof(key));
+				if (generate_key(key, sizeof(key)) < 0) {
+					ws->state = WS_STATE_ERROR;
+					if (ws->callbacks.on_error)
+						ws->callbacks.on_error(ws, "failed to generate WebSocket key",
+						                       ws->callbacks.userdata);
+					return WS_EVENT_ERROR;
+				}
 				memcpy(ws->key, key, sizeof(key));
 				ws->key[sizeof(key)] = '\0';
 
