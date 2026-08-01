@@ -6,7 +6,7 @@ test server, runs a C test client against it, and checks exit codes.
 Usage:
     python -m pytest tests/network/test_network.py -v
 """
-import os, sys, subprocess, time, socket, platform
+import os, sys, subprocess, time, socket, platform, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
@@ -23,15 +23,36 @@ def _find_binary(name):
     return find_tool(name)
 
 
+def _start_ready_process(cmd, name):
+    fd, ready_file = tempfile.mkstemp(prefix="libneurosdk-ready-")
+    os.close(fd)
+    os.unlink(ready_file)
+    env = os.environ.copy()
+    env["WS_TEST_READY_FILE"] = ready_file
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            text=True, env=env)
+    deadline = time.monotonic() + 10
+    try:
+        while time.monotonic() < deadline:
+            if os.path.exists(ready_file):
+                return proc
+            if proc.poll() is not None:
+                stderr = proc.stderr.read()
+                pytest.fail(
+                    f"{name} exited during startup ({proc.returncode}):\n{stderr}")
+            time.sleep(0.01)
+        proc.terminate()
+        _, stderr = proc.communicate(timeout=5)
+        pytest.fail(f"{name} did not become ready within 10s:\n{stderr}")
+    finally:
+        for path in (ready_file, ready_file + ".tmp"):
+            if os.path.exists(path):
+                os.unlink(path)
+
+
 def _start_server(script, port, *args):
     cmd = [sys.executable, os.path.join(SERVERS_DIR, script), str(port)] + list(args)
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            text=True)
-    time.sleep(2)
-    if proc.poll() is not None:
-        stderr = proc.stderr.read()
-        pytest.fail(f"{script} exited during startup ({proc.returncode}):\n{stderr}")
-    return proc
+    return _start_ready_process(cmd, script)
 
 
 def _wait_port(port, timeout=10):
@@ -165,9 +186,9 @@ def test_11_blackhole():
     port = 19104
     listen_script = os.path.join(HANDSHAKE_DIR, "listen_only_server.py")
     assert os.path.exists(listen_script), "listen_only_server.py not found"
-    srv = subprocess.Popen([sys.executable, listen_script, str(port), "10"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)
+    srv = _start_ready_process(
+        [sys.executable, listen_script, str(port), "10"],
+        "listen_only_server.py")
     client_bin = _find_binary("test_negative")
     assert client_bin, "test_negative binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
@@ -205,10 +226,9 @@ def test_14_bad_handshake():
     port = 19107
     bh_script = os.path.join(HANDSHAKE_DIR, "bad_handshake_server.py")
     assert os.path.exists(bh_script), "bad_handshake_server.py not found"
-    srv = subprocess.Popen(
+    srv = _start_ready_process(
         [sys.executable, bh_script, "404", str(port)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(1)
+        "bad_handshake_server.py")
     client_bin = _find_binary("test_negative")
     assert client_bin, "test_negative binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",

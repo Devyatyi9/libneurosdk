@@ -15,6 +15,7 @@ Modes:
   no_accept   101 without Sec-WebSocket-Accept
 """
 import socket, sys
+from server_ready import mark_server_ready
 
 RESPONSES = {
     # (status_line, headers)
@@ -57,6 +58,7 @@ def main():
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(('0.0.0.0', port))
     s.listen(5)
+    mark_server_ready()
     print(f"bad_handshake_server [{mode}] on port {port}")
     status_line, headers = RESPONSES[mode]
     try:

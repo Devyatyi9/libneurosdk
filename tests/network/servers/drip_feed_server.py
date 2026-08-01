@@ -5,7 +5,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ws_frame import build_close, build_text, make_101, read_client_frame, read_http_upgrade
+from ws_frame import build_close, build_text, make_101, mark_server_ready, read_client_frame, read_http_upgrade
 
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 19004
@@ -16,6 +16,7 @@ srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 srv.bind((HOST, PORT))
 srv.listen(1)
+mark_server_ready()
 srv.settimeout(30)
 
 try:

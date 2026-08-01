@@ -1,5 +1,8 @@
 """WS frame construction + HTTP upgrade helpers for test servers."""
-import struct, hashlib, base64
+import base64
+import hashlib
+import os
+import struct
 
 OPCODE_CONT = 0x0
 OPCODE_TEXT = 0x1
@@ -9,6 +12,16 @@ OPCODE_PING = 0x9
 OPCODE_PONG = 0xA
 
 MAGIC_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def mark_server_ready():
+    """Signal that a one-shot server is listening without connecting to it."""
+    path = os.environ.get("WS_TEST_READY_FILE")
+    if path:
+        temporary = path + ".tmp"
+        with open(temporary, "x", encoding="ascii"):
+            pass
+        os.replace(temporary, path)
 
 
 def build_frame(opcode, payload=b"", fin=True):

@@ -12,6 +12,7 @@ For the latter, use an unroutable IP like 192.0.2.1 (TEST-NET-1).
 Usage: python listen_only_server.py [port] [duration_sec]
 """
 import socket, sys, time
+from server_ready import mark_server_ready
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9999
@@ -21,6 +22,7 @@ def main():
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(('0.0.0.0', port))
     s.listen(1)
+    mark_server_ready()
     # Don't accept() -- kernel completes TCP handshake, client's
     # send/recv will stall on actual data transfer.
     time.sleep(duration)

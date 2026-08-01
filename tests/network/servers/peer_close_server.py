@@ -5,7 +5,7 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ws_frame import build_close, make_101, read_http_upgrade
+from ws_frame import build_close, make_101, mark_server_ready, read_http_upgrade
 
 
 def recv_exact(conn, size):
@@ -35,6 +35,7 @@ srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 srv.bind(("127.0.0.1", port))
 srv.listen(1)
+mark_server_ready()
 
 try:
     conn, _ = srv.accept()
