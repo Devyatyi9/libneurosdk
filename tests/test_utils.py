@@ -50,8 +50,11 @@ def build_env(bin_path):
 
 def find_tool(name):
     """Locate a test binary (echo_test, long_session, etc.) across build dirs."""
-    for bd in ("build", "build-release", "build-x64", "build-x86",
-               "build-asan", "build-asan-x64", "build-asan-x86"):
+    build_dirs = ("build", "build-release", "build-x64", "build-x86",
+                  "build-asan", "build-asan-x64", "build-asan-x86")
+    if os.name != "nt":
+        build_dirs = ("build-wsl",) + build_dirs
+    for bd in build_dirs:
         for sub in ("Release", "."):
             path = os.path.join(ROOT, bd, sub, name + (".exe" if os.name == "nt" else ""))
             if os.path.isfile(path):
