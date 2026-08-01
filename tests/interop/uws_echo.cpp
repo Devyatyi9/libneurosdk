@@ -1,4 +1,3 @@
-#define UWS_NO_SSL
 #include <cstdlib>
 #include "App.h"
 
