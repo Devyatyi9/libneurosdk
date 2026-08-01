@@ -476,6 +476,5 @@ def test_32_peer_initiated_clean_close():
     client_bin = _find_binary("test_peer_close")
     assert client_bin, "test_peer_close binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
-    srv.wait(timeout=5)
-    assert srv.returncode == 0, f"peer-close server failed (exit {srv.returncode})"
+    _wait_server(srv, "peer_close_server.py", timeout=5)
     assert rc == 0, f"peer-initiated clean close failed (exit {rc})"
