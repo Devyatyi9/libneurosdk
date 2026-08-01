@@ -62,7 +62,7 @@ jobs:
         cmake -B build -DNEURO_BUILD_TESTS=ON ${{ matrix.asan && '-DNEURO_SANITIZE=ON' || '' }} ${{ matrix.os == 'windows-latest' && (matrix.arch == 'x86' && '-A Win32' || format('-A {0}', matrix.arch)) || '' }}
 
     - name: Build
-      run: cmake --build build --config Release
+      run: cmake --build build --config Release --target ws_test_suite
 
     - name: Locate ASan DLL
       if: matrix.os == 'windows-latest' && matrix.asan

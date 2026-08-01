@@ -120,6 +120,11 @@ if(NEURO_BUILD_TESTS)
 		add_executable(${t} tests/network/${t}.c)
 		target_link_libraries(${t} PRIVATE ws_client_test)
 	endforeach()
+
+	add_custom_target(ws_test_suite DEPENDS
+		echo_test integration_test fuzzing_client long_session
+		${UNIT_TESTS} ${NET_TESTS}
+	)
 endif()
 
 if(NEURO_BUILD_EXAMPLES)
