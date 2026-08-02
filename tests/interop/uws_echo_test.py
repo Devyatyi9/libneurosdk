@@ -4,6 +4,7 @@ import os, socket, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
+UWS_COMMIT = "fe7da4cb05622b8d004718ec3ca05101782eb1c2"
 
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 from test_utils import build_env, find_echo_test
@@ -16,20 +17,38 @@ def main():
     if not os.path.isfile(uws_bin):
         uws_dir = os.path.join(HERE, "uWebSockets")
         if not os.path.isdir(uws_dir):
-            subprocess.check_call(["git", "clone", "--recursive",
-                                   "https://github.com/uWebSockets/uWebSockets", uws_dir],
-                                  timeout=600)
-        build_dir = os.path.join(HERE, "build")
-        cmake_args = ["cmake", "-S", HERE, "-B", build_dir]
+            subprocess.check_call([
+                "git", "clone", "--depth", "1", "--filter=blob:none", "--no-checkout",
+                "https://github.com/uWebSockets/uWebSockets", uws_dir,
+            ], timeout=600)
+        has_commit = subprocess.run(
+            ["git", "-C", uws_dir, "cat-file", "-e", f"{UWS_COMMIT}^{{commit}}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        if not has_commit:
+            subprocess.check_call(
+                ["git", "-C", uws_dir, "fetch", "--depth", "1", "origin", UWS_COMMIT],
+                timeout=600)
+        subprocess.check_call(
+            ["git", "-C", uws_dir, "checkout", "--detach", UWS_COMMIT], timeout=60)
+        # Only uSockets is needed for this no-SSL, no-QUIC interop server.
+        subprocess.check_call([
+            "git", "-C", uws_dir, "submodule", "update", "--init", "--depth", "1",
+            "uSockets",
+        ], timeout=600)
+        build_name = "build"
         if sys.platform == "win32":
             vcpkg_bin = subprocess.check_output(
                 ["where", "vcpkg"], text=True, timeout=30).splitlines()[0].strip()
             vcpkg_root = os.path.dirname(vcpkg_bin)
             target_arch = os.environ.get("VSCMD_ARG_TGT_ARCH", "x64").lower()
             arch = "x86" if target_arch in ("x86", "win32") else "x64"
+            build_name = f"build-{arch}"
             triplet = f"{arch}-windows-static"
             subprocess.check_call([vcpkg_bin, "install", f"libuv:{triplet}",
                                    f"zlib:{triplet}"], timeout=600)
+        build_dir = os.path.join(HERE, build_name)
+        cmake_args = ["cmake", "-S", HERE, "-B", build_dir]
+        if sys.platform == "win32":
             cmake_args.extend([
                 "-A", "Win32" if arch == "x86" else "x64",
                 f"-DCMAKE_TOOLCHAIN_FILE={vcpkg_root}/scripts/buildsystems/vcpkg.cmake",
