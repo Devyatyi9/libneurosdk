@@ -8,7 +8,7 @@ Verifies the client doesn't hang forever on stalled recv().
 import subprocess, sys, os, time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from test_utils import build_env, find_echo_test
+from test_utils import build_env, find_echo_test, stop_process
 
 def main():
     echo_test_bin = sys.argv[1] if len(sys.argv) > 1 else find_echo_test()
@@ -20,11 +20,15 @@ def main():
     time.sleep(2)
 
     url = f"ws://127.0.0.1:{port}/"
-    rc = subprocess.call([echo_test_bin, url], env=build_env(echo_test_bin),
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    server.terminate()
-    server.wait()
+    try:
+        rc = subprocess.run(
+            [echo_test_bin, url], env=build_env(echo_test_bin), timeout=30,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+    except subprocess.TimeoutExpired:
+        print("Stalled TCP test FAILED (echo_test exceeded 30s)")
+        return 1
+    finally:
+        stop_process(server)
 
     if rc == 0:
         print("UNEXPECTED SUCCESS: echo_test connected to listen-only server")

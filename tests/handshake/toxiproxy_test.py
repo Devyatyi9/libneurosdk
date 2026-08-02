@@ -29,7 +29,7 @@ Requires toxiproxy-server in PATH or TOXIPROXY_BIN env var.
 import argparse, asyncio, json, os, subprocess, sys, time, urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from test_utils import build_env, find_echo_test
+from test_utils import build_env, find_echo_test, stop_process
 
 TOXIPROXY_PORT = 8474
 UPSTREAM_PORT = 19001
@@ -65,6 +65,7 @@ def start_toxiproxy():
     if not bin_path:
         candidates = ["toxiproxy-server",
                       "/tmp/toxiproxy-server",
+                      r"C:\ProgramData\toxiproxy\toxiproxy-server-windows-amd64.exe",
                       r"C:\ProgramData\toxiproxy\toxiproxy-server.exe"]
         for c in candidates:
             if os.path.isfile(c):
@@ -80,7 +81,7 @@ def start_toxiproxy():
 def create_proxy(name, listen, upstream):
     data = json.dumps({"name": name, "listen": f"127.0.0.1:{listen}", "upstream": f"127.0.0.1:{upstream}"}).encode()
     req = urllib.request.Request(toxiproxy_url("/proxies"), data, {"Content-Type": "application/json"})
-    urllib.request.urlopen(req)
+    urllib.request.urlopen(req, timeout=10)
 
 def add_toxic(proxy_name, toxic, stream=None):
     data = dict(toxic)
@@ -88,7 +89,7 @@ def add_toxic(proxy_name, toxic, stream=None):
         data["stream"] = stream
     body = json.dumps(data).encode()
     req = urllib.request.Request(f"{toxiproxy_url('/proxies')}/{proxy_name}/toxics", body, {"Content-Type": "application/json"}, method="POST")
-    urllib.request.urlopen(req)
+    urllib.request.urlopen(req, timeout=10)
 
 def add_toxic_both(proxy_name, toxic):
     """Apply toxic to both upstream and downstream directions."""
@@ -102,7 +103,7 @@ def add_bandwidth(proxy_name, rate):
 def delete_proxy(name):
     req = urllib.request.Request(f"{toxiproxy_url('/proxies')}/{name}", method="DELETE")
     try:
-        urllib.request.urlopen(req)
+        urllib.request.urlopen(req, timeout=10)
     except:
         pass
 
@@ -121,7 +122,12 @@ def run_pre_connect(toxic_name, echo_test_bin, proxy_port, up_port):
 
     url = f"ws://127.0.0.1:{proxy_port}/"
     print(f"Running: {echo_test_bin} {url}")
-    rc = subprocess.call([echo_test_bin, url], env=build_env(echo_test_bin))
+    try:
+        rc = subprocess.run([echo_test_bin, url], env=build_env(echo_test_bin),
+                            timeout=120).returncode
+    except subprocess.TimeoutExpired:
+        print("echo_test exceeded 120s")
+        return 1
     print(f"echo_test exit code: {rc}")
     # For timeout/reset toxics, echo_test SHOULD fail (connection killed)
     if toxic_name in ("timeout", "reset"):
@@ -241,10 +247,8 @@ def main():
     finally:
         delete_proxy("ws_test")
         if toxiproxy:
-            toxiproxy.terminate()
-            toxiproxy.wait()
-        echo.terminate()
-        echo.wait()
+            stop_process(toxiproxy)
+        stop_process(echo)
 
     sys.exit(rc)
 

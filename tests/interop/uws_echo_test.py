@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build, start uWS echo-server and run echo_test against it."""
-import os, platform, socket, subprocess, sys, time
+import os, socket, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
@@ -17,21 +17,27 @@ def main():
         uws_dir = os.path.join(HERE, "uWebSockets")
         if not os.path.isdir(uws_dir):
             subprocess.check_call(["git", "clone", "--recursive",
-                                   "https://github.com/uWebSockets/uWebSockets", uws_dir])
+                                   "https://github.com/uWebSockets/uWebSockets", uws_dir],
+                                  timeout=600)
         build_dir = os.path.join(HERE, "build")
         cmake_args = ["cmake", "-S", HERE, "-B", build_dir]
         if sys.platform == "win32":
-            vcpkg_root = os.path.dirname(
-                subprocess.check_output(["where", "vcpkg"], text=True).splitlines()[0].strip())
-            machine = platform.machine().lower()
-            arch = "x64" if machine in ("amd64", "x86_64", "arm64") else "x86"
+            vcpkg_bin = subprocess.check_output(
+                ["where", "vcpkg"], text=True, timeout=30).splitlines()[0].strip()
+            vcpkg_root = os.path.dirname(vcpkg_bin)
+            target_arch = os.environ.get("VSCMD_ARG_TGT_ARCH", "x64").lower()
+            arch = "x86" if target_arch in ("x86", "win32") else "x64"
             triplet = f"{arch}-windows-static"
-            subprocess.check_call(["vcpkg", "install", f"libuv:{triplet}",
-                                   f"zlib:{triplet}"])
-            cmake_args.append(
-                f"-DCMAKE_PREFIX_PATH={vcpkg_root}/installed/{triplet}")
-        subprocess.check_call(cmake_args)
-        subprocess.check_call(["cmake", "--build", build_dir, "--config", "Release"])
+            subprocess.check_call([vcpkg_bin, "install", f"libuv:{triplet}",
+                                   f"zlib:{triplet}"], timeout=600)
+            cmake_args.extend([
+                "-A", "Win32" if arch == "x86" else "x64",
+                f"-DCMAKE_TOOLCHAIN_FILE={vcpkg_root}/scripts/buildsystems/vcpkg.cmake",
+                f"-DVCPKG_TARGET_TRIPLET={triplet}",
+            ])
+        subprocess.check_call(cmake_args, timeout=600)
+        subprocess.check_call(
+            ["cmake", "--build", build_dir, "--config", "Release"], timeout=600)
         src = os.path.join(build_dir, "Release" if sys.platform == "win32" else "",
                            "uws_echo.exe" if sys.platform == "win32" else "uws_echo")
         if os.path.isfile(src):

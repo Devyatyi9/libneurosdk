@@ -1,5 +1,5 @@
-"""Shared utilities for test scripts: PE arch detection, ASan DLL PATH, binary discovery."""
-import glob, os
+"""Shared utilities for test scripts: binary discovery and process cleanup."""
+import glob, os, subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
@@ -65,3 +65,18 @@ def find_tool(name):
 
 def find_echo_test():
     return find_tool("echo_test")
+
+def stop_process(proc, timeout=10):
+    """Terminate a child process without allowing test cleanup to hang."""
+    if proc is None:
+        return
+    if proc.poll() is None:
+        proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            pass

@@ -11,7 +11,7 @@ import os, sys, subprocess, time, socket, platform, tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-from test_utils import build_env, find_tool, find_echo_test
+from test_utils import build_env, find_tool, find_echo_test, stop_process
 
 SERVERS_DIR = os.path.join(HERE, "servers")
 HANDSHAKE_DIR = os.path.join(ROOT, "tests", "handshake")
@@ -122,7 +122,7 @@ def test_5_handshake_and_echo():
     proc = _start_uws(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
-    proc.terminate(); proc.wait()
+    stop_process(proc)
     assert rc == 0, f"echo_test failed with exit code {rc}"
 
 
@@ -135,7 +135,7 @@ def test_6_binary_echo():
     int_bin = _find_binary("integration_test")
     assert int_bin, "integration_test binary not built"
     rc = _run_client(int_bin, f"ws://127.0.0.1:{port}/")
-    srv.terminate(); srv.wait()
+    stop_process(srv)
     assert rc == 0, f"integration_test failed with exit code {rc}"
 
 
@@ -145,7 +145,7 @@ def test_7_normal_close():
     proc = _start_uws(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
-    proc.terminate(); proc.wait()
+    stop_process(proc)
     assert rc == 0, f"echo_test normal close failed (exit {rc})"
 
 
@@ -245,7 +245,7 @@ def test_11_blackhole():
     assert client_bin, "test_negative binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
                      "timeout-before-open")
-    srv.terminate(); srv.wait()
+    stop_process(srv)
     assert rc == 0, "blackhole did not remain pending until the expected timeout"
 
 
@@ -285,7 +285,7 @@ def test_14_bad_handshake():
     assert client_bin, "test_negative binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
                      "error-before-open", "bad HTTP response during upgrade")
-    srv.terminate(); srv.wait()
+    stop_process(srv)
     assert rc == 0, "HTTP 404 did not produce the expected handshake error"
 
 
@@ -295,7 +295,7 @@ def test_15_ipv4():
     proc = _start_uws(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://127.0.0.1:{port}/")
-    proc.terminate(); proc.wait()
+    stop_process(proc)
     assert rc == 0, f"IPv4 echo failed (exit {rc})"
 
 def test_15_ipv6():
@@ -304,7 +304,7 @@ def test_15_ipv6():
     proc = _start_uws(port)
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://[::1]:{port}/")
-    proc.terminate(); proc.wait()
+    stop_process(proc)
     assert rc == 0, f"IPv6 loopback connect failed (exit {rc})"
 
 
@@ -326,7 +326,7 @@ def test_17_double_close():
     client_bin = _find_binary("test_double_close")
     assert client_bin, "test_double_close binary not built"
     rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
-    proc.terminate(); proc.wait()
+    stop_process(proc)
     assert rc == 0, f"double_close test failed (exit {rc})"
 
 
@@ -375,7 +375,7 @@ def test_21_dual_stack_fallback():
     assert _wait_port(port), "echo_server.py did not start"
     echo_bin = find_echo_test()
     rc = _run_client(echo_bin, f"ws://localhost:{port}/echo")
-    srv.terminate(); srv.wait()
+    stop_process(srv)
     assert rc == 0, f"dual-stack fallback failed (exit {rc})"
 
 
@@ -412,8 +412,8 @@ def test_22_proxy_tunnel():
         assert targets[0] == f"127.0.0.1:{up_port}", \
             f"unexpected CONNECT target: {targets[0]}"
     finally:
-        px.terminate(); px.wait()
-        srv.terminate(); srv.wait()
+        stop_process(px)
+        stop_process(srv)
 
 
 def test_23_proxy_env_no_proxy():
@@ -430,10 +430,15 @@ def test_23_proxy_env_no_proxy():
         env = build_env(client_bin)
         env["HTTP_PROXY"] = f"http://127.0.0.1:{dead_port}"
         env["NO_PROXY"] = f"127.0.0.1,localhost,::1"
-        rc = subprocess.call([client_bin, f"ws://127.0.0.1:{up_port}/"], env=env)
+        try:
+            rc = subprocess.run(
+                [client_bin, f"ws://127.0.0.1:{up_port}/"], env=env,
+                timeout=120).returncode
+        except subprocess.TimeoutExpired:
+            pytest.fail("NO_PROXY client timed out after 120s")
         assert rc == 0, f"NO_PROXY bypass failed (exit {rc})"
     finally:
-        srv.terminate(); srv.wait()
+        stop_process(srv)
 
 
 def test_24_large_single_frame_text():

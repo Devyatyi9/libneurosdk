@@ -131,7 +131,8 @@ try:
     if sys.platform == "linux":
         shutil.rmtree(reports_dir, ignore_errors=True)
         os.makedirs(reports_dir)
-        subprocess.run(DOCKER + ["rm", "-f", "autobahn"], capture_output=True)
+        subprocess.run(DOCKER + ["rm", "-f", "autobahn"], capture_output=True,
+                       timeout=30)
         subprocess.run(DOCKER + [
             "run", "--rm", "-d",
             "--user", f"{os.getuid()}:{os.getgid()}",
@@ -141,7 +142,7 @@ try:
             "--name", "autobahn",
             "crossbario/autobahn-testsuite",
             "wstest", "-m", "fuzzingserver", "-s", "/config/fuzzingserver.json"
-        ], check=True)
+        ], check=True, timeout=30)
         started_server = True
         print("Autobahn fuzzingserver started via Docker")
         print("Mount ~/autobahn-reports:/reports to capture reports")
@@ -159,7 +160,12 @@ try:
     run_started = time.monotonic()
     for case in range(1, total_cases + 1):
         case_started = time.monotonic()
-        rc = subprocess.run([BIN, str(case), url], env=build_env(BIN)).returncode
+        try:
+            rc = subprocess.run([BIN, str(case), url], env=build_env(BIN),
+                                timeout=600).returncode
+        except subprocess.TimeoutExpired:
+            rc = 124
+            print(f"  case {case}: TIMEOUT after 600s", flush=True)
         case_elapsed = time.monotonic() - case_started
         if rc != 0:
             print(f"  case {case}: FAIL (exit {rc})", flush=True)
@@ -179,14 +185,19 @@ try:
             report_path = os.path.join(reports_dir, reports[case_id]["reportfile"])
             with open(report_path, encoding="utf-8") as f:
                 case_number = json.load(f)["case"]
-            subprocess.run([BIN, str(case_number), url], env=build_env(BIN), check=False)
+            try:
+                subprocess.run([BIN, str(case_number), url], env=build_env(BIN),
+                               check=False, timeout=600)
+            except subprocess.TimeoutExpired:
+                print(f"  retry case {case_number}: TIMEOUT after 600s", flush=True)
         trigger_update_reports(HOST, PORT)
 except KeyboardInterrupt:
     print("\nInterrupted.")
     sys.exit(130)
 finally:
     if started_server:
-        subprocess.run(DOCKER + ["stop", "autobahn"], capture_output=True)
+        subprocess.run(DOCKER + ["stop", "autobahn"], capture_output=True,
+                       timeout=30)
 
 index = os.path.join(reports_dir, "index.json")
 if os.path.exists(index):

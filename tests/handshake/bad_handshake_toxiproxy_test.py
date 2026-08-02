@@ -10,7 +10,7 @@ Usage:
 import json, os, subprocess, sys, time, urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from test_utils import build_env, find_echo_test
+from test_utils import build_env, find_echo_test, stop_process
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
@@ -25,17 +25,17 @@ def toxiproxy_url(path):
 def create_proxy(name, listen, upstream):
     data = json.dumps({"name": name, "listen": f"127.0.0.1:{listen}", "upstream": f"127.0.0.1:{upstream}"}).encode()
     req = urllib.request.Request(toxiproxy_url("/proxies"), data, {"Content-Type": "application/json"})
-    urllib.request.urlopen(req)
+    urllib.request.urlopen(req, timeout=10)
 
 def add_toxic(proxy_name, toxic_type, attrs):
     body = json.dumps({"type": toxic_type, "attributes": attrs}).encode()
     req = urllib.request.Request(f"{toxiproxy_url('/proxies')}/{proxy_name}/toxics", body, {"Content-Type": "application/json"}, method="POST")
-    urllib.request.urlopen(req)
+    urllib.request.urlopen(req, timeout=10)
 
 def delete_proxy(name):
     try:
         req = urllib.request.Request(f"{toxiproxy_url('/proxies')}/{name}", method="DELETE")
-        urllib.request.urlopen(req)
+        urllib.request.urlopen(req, timeout=10)
     except:
         pass
 
@@ -59,6 +59,7 @@ def main():
             if not toxiproxy_bin:
                 candidates = ["toxiproxy-server",
                               "/tmp/toxiproxy-server",
+                              r"C:\ProgramData\toxiproxy\toxiproxy-server-windows-amd64.exe",
                               r"C:\ProgramData\toxiproxy\toxiproxy-server.exe"]
                 for c in candidates:
                     if os.path.isfile(c):
@@ -74,8 +75,7 @@ def main():
             print(f"--- [{mode}] ---")
             # Kill old bad_handshake_server if any
             if bad_server:
-                bad_server.terminate()
-                bad_server.wait()
+                stop_process(bad_server)
 
             # Start bad_handshake_server with current mode on UPSTREAM_PORT
             script = os.path.join(HERE, "bad_handshake_server.py")
@@ -90,8 +90,15 @@ def main():
 
             # Run echo_test
             url = f"ws://127.0.0.1:{PROXY_PORT}/"
-            rc = subprocess.call([echo_test_bin, url], env=build_env(echo_test_bin),
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                rc = subprocess.run(
+                    [echo_test_bin, url], env=build_env(echo_test_bin), timeout=30,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL).returncode
+            except subprocess.TimeoutExpired:
+                print("  echo_test exceeded 30s")
+                results[mode] = (124, False)
+                continue
 
             ok = rc != 0  # non-zero = expected (connection rejected)
             status = "OK" if ok else "CONNECTED (unexpected)"
@@ -102,11 +109,9 @@ def main():
 
     finally:
         if bad_server:
-            bad_server.terminate()
-            bad_server.wait()
+            stop_process(bad_server)
         if toxiproxy:
-            toxiproxy.terminate()
-            toxiproxy.wait()
+            stop_process(toxiproxy)
         delete_proxy("bad_test")
 
     print()
