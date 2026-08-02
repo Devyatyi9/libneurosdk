@@ -7,7 +7,8 @@ across all 7 bad handshake modes.
 Usage:
     python bad_handshake_toxiproxy_test.py [echo_test_path]
 """
-import json, os, subprocess, sys, time, urllib.request
+import json, os, subprocess, sys, tempfile, time
+import urllib.error, urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from test_utils import build_env, find_echo_test, stop_process
@@ -32,12 +33,25 @@ def add_toxic(proxy_name, toxic_type, attrs):
     req = urllib.request.Request(f"{toxiproxy_url('/proxies')}/{proxy_name}/toxics", body, {"Content-Type": "application/json"}, method="POST")
     urllib.request.urlopen(req, timeout=10)
 
-def delete_proxy(name):
+def delete_proxy(name, missing_ok=True):
     try:
         req = urllib.request.Request(f"{toxiproxy_url('/proxies')}/{name}", method="DELETE")
         urllib.request.urlopen(req, timeout=10)
-    except:
-        pass
+    except urllib.error.HTTPError as exc:
+        if not (missing_ok and exc.code == 404):
+            raise
+
+def wait_ready(proc, ready_file, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if os.path.exists(ready_file):
+            return
+        if proc.poll() is not None:
+            raise RuntimeError(
+                f"server exited during startup ({proc.returncode}): "
+                f"{proc.stderr.read()}")
+        time.sleep(0.1)
+    raise RuntimeError("server did not become ready within 10s")
 
 def main():
     echo_test_bin = sys.argv[1] if len(sys.argv) > 1 else find_echo_test()
@@ -54,7 +68,7 @@ def main():
         toxiproxy = None
         try:
             urllib.request.urlopen(f"http://127.0.0.1:{TOXIPROXY_PORT}/version", timeout=2)
-        except Exception:
+        except (OSError, urllib.error.URLError):
             toxiproxy_bin = os.environ.get("TOXIPROXY_BIN")
             if not toxiproxy_bin:
                 candidates = ["toxiproxy-server",
@@ -68,8 +82,23 @@ def main():
                 if not toxiproxy_bin:
                     import shutil
                     toxiproxy_bin = shutil.which("toxiproxy-server") or "toxiproxy-server"
-            toxiproxy = subprocess.Popen([toxiproxy_bin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(2)
+            toxiproxy = subprocess.Popen(
+                [toxiproxy_bin], stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE, text=True)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if toxiproxy.poll() is not None:
+                    raise RuntimeError(
+                        f"toxiproxy exited during startup ({toxiproxy.returncode}): "
+                        f"{toxiproxy.stderr.read()}")
+                try:
+                    urllib.request.urlopen(
+                        f"http://127.0.0.1:{TOXIPROXY_PORT}/version", timeout=1)
+                    break
+                except (OSError, urllib.error.URLError):
+                    time.sleep(0.1)
+            else:
+                raise RuntimeError("toxiproxy did not become ready within 10s")
 
         for mode in MODES:
             print(f"--- [{mode}] ---")
@@ -79,40 +108,56 @@ def main():
 
             # Start bad_handshake_server with current mode on UPSTREAM_PORT
             script = os.path.join(HERE, "bad_handshake_server.py")
-            bad_server = subprocess.Popen([sys.executable, script, mode, str(UPSTREAM_PORT)],
-                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(1)
+            with tempfile.TemporaryDirectory() as marker_dir:
+                ready_file = os.path.join(marker_dir, "ready")
+                served_file = os.path.join(marker_dir, "served")
+                server_env = os.environ.copy()
+                server_env["WS_TEST_READY_FILE"] = ready_file
+                server_env["WS_TEST_SERVED_FILE"] = served_file
+                bad_server = subprocess.Popen(
+                    [sys.executable, script, mode, str(UPSTREAM_PORT), "--once"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                    env=server_env)
+                wait_ready(bad_server, ready_file)
 
-            # Create proxy with slicer
-            delete_proxy("bad_test")
-            create_proxy("bad_test", PROXY_PORT, UPSTREAM_PORT)
-            add_toxic("bad_test", "slicer", {"average_size": 1, "size_variation": 0})
+                # Create proxy with slicer
+                delete_proxy("bad_test")
+                create_proxy("bad_test", PROXY_PORT, UPSTREAM_PORT)
+                add_toxic("bad_test", "slicer", {"average_size": 1, "size_variation": 0})
 
-            # Run echo_test
-            url = f"ws://127.0.0.1:{PROXY_PORT}/"
-            try:
-                rc = subprocess.run(
-                    [echo_test_bin, url], env=build_env(echo_test_bin), timeout=30,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL).returncode
-            except subprocess.TimeoutExpired:
-                print("  echo_test exceeded 30s")
-                results[mode] = (124, False)
-                continue
+                # Run echo_test
+                url = f"ws://127.0.0.1:{PROXY_PORT}/"
+                try:
+                    rc = subprocess.run(
+                        [echo_test_bin, url], env=build_env(echo_test_bin), timeout=30,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL).returncode
+                except subprocess.TimeoutExpired:
+                    print("  echo_test exceeded 30s")
+                    results[mode] = (124, False)
+                    continue
 
-            ok = rc != 0  # non-zero = expected (connection rejected)
-            status = "OK" if ok else "CONNECTED (unexpected)"
-            results[mode] = (rc, ok)
-            print(f"  exit={rc}  {status}")
+                try:
+                    server_rc = bad_server.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    server_rc = None
+                served = os.path.exists(served_file)
+                ok = rc != 0 and server_rc == 0 and served
+                status = "OK" if ok else "FAILED validation"
+                results[mode] = (rc, ok)
+                print(f"  exit={rc} server_exit={server_rc} served={served}  {status}")
 
-            delete_proxy("bad_test")
+                delete_proxy("bad_test")
 
     finally:
         if bad_server:
             stop_process(bad_server)
+        try:
+            delete_proxy("bad_test")
+        except (OSError, urllib.error.URLError):
+            pass
         if toxiproxy:
             stop_process(toxiproxy)
-        delete_proxy("bad_test")
 
     print()
     print("=== Summary ===")

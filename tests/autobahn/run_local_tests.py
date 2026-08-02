@@ -64,25 +64,25 @@ def get_case_count(host, port, timeout=30):
 def trigger_update_reports(host, port):
     """Connect to /updateReports to finalise Autobahn report files."""
     try:
-        s = socket.socket()
-        s.settimeout(10)
-        s.connect((host, int(port)))
-        key = base64.b64encode(os.urandom(16)).decode()
-        req = (
-            f"GET /updateReports?agent={AGENT} HTTP/1.1\r\n"
-            f"Host: {host}:{port}\r\n"
-            f"Upgrade: websocket\r\n"
-            f"Connection: Upgrade\r\n"
-            f"Sec-WebSocket-Key: {key}\r\n"
-            f"Sec-WebSocket-Version: 13\r\n\r\n"
-        )
-        s.send(req.encode())
-        resp = s.recv(4096)
-        if b"101" not in resp:
-            print(f"  updateReports: unexpected response ({resp[:50]})")
-        s.close()
-    except Exception as e:
+        with socket.create_connection((host, int(port)), timeout=10) as s:
+            key = base64.b64encode(os.urandom(16)).decode()
+            req = (
+                f"GET /updateReports?agent={AGENT} HTTP/1.1\r\n"
+                f"Host: {host}:{port}\r\n"
+                f"Upgrade: websocket\r\n"
+                f"Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\n"
+                f"Sec-WebSocket-Version: 13\r\n\r\n"
+            )
+            s.sendall(req.encode())
+            resp = s.recv(4096)
+            if not resp.startswith(b"HTTP/1.1 101 "):
+                print(f"  updateReports: unexpected response ({resp[:50]})")
+                return False
+        return True
+    except (OSError, ValueError) as e:
         print(f"  updateReports failed: {e}")
+        return False
 
 
 def load_reports(reports_dir):
@@ -177,7 +177,8 @@ try:
                   flush=True)
 
     print("Done. Triggering /updateReports to finalise report files ...")
-    trigger_update_reports(HOST, PORT)
+    if not trigger_update_reports(HOST, PORT) and started_server:
+        raise RuntimeError("failed to finalise local Autobahn reports")
     reports, failures = load_reports(reports_dir)
     if failures:
         print(f"Retrying {len(failures)} failed report cases once: {failures}", flush=True)
@@ -190,7 +191,8 @@ try:
                                check=False, timeout=600)
             except subprocess.TimeoutExpired:
                 print(f"  retry case {case_number}: TIMEOUT after 600s", flush=True)
-        trigger_update_reports(HOST, PORT)
+        if not trigger_update_reports(HOST, PORT) and started_server:
+            raise RuntimeError("failed to finalise local Autobahn retry reports")
 except KeyboardInterrupt:
     print("\nInterrupted.")
     sys.exit(130)
@@ -210,5 +212,7 @@ if os.path.exists(index):
         sys.exit(1)
     print(f"Reports saved to {reports_dir}/; {len(reports)} cases passed")
 else:
-    print(f"WARNING: {index} not found -- reports may be incomplete")
-    print(f"  Check {reports_dir}/ manually")
+    if started_server:
+        print(f"ERROR: {index} not found -- local reports are incomplete")
+        sys.exit(1)
+    print(f"Reports are stored by the remote server; no local index at {index}")

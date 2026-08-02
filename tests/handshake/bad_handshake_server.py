@@ -3,7 +3,7 @@
 the WS client's parse_upgrade_response() error handling.
 
 Usage:
-    python bad_handshake_server.py <mode> [port]
+    python bad_handshake_server.py <mode> [port] [--once]
 
 Modes:
   200       HTTP/1.1 200 OK (not 101)
@@ -14,7 +14,7 @@ Modes:
   bad_accept  101 with wrong Sec-WebSocket-Accept
   no_accept   101 without Sec-WebSocket-Accept
 """
-import socket, sys
+import os, socket, sys
 from server_ready import mark_server_ready
 
 RESPONSES = {
@@ -46,10 +46,15 @@ def handle(conn, status_line, headers):
         data += chunk
     conn.sendall(status_line + headers)
     conn.close()
+    served_file = os.environ.get("WS_TEST_SERVED_FILE")
+    if served_file:
+        with open(served_file, "x", encoding="ascii"):
+            pass
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "200"
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 9998
+    once = "--once" in sys.argv[3:]
     if mode not in RESPONSES:
         print(f"Unknown mode: {mode}. Available: {', '.join(RESPONSES.keys())}")
         sys.exit(1)
@@ -65,6 +70,8 @@ def main():
         while True:
             conn, addr = s.accept()
             handle(conn, status_line, headers)
+            if once:
+                break
     except KeyboardInterrupt:
         pass
     finally:

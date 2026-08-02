@@ -7,7 +7,7 @@ client and the requested target (recorded in a log file).
 Usage:
     python connect_proxy_server.py <listen_port> <log_file>
 """
-import socket, sys, threading
+import os, socket, sys, threading
 
 def pump(src, dst):
     try:
@@ -36,14 +36,16 @@ def handle(conn, addr, log):
         while b"\r\n\r\n" not in data:
             chunk = conn.recv(4096)
             if not chunk:
-                return
+                raise RuntimeError("client disconnected before sending CONNECT headers")
             data += chunk
+            if len(data) > 64 * 1024:
+                raise RuntimeError("CONNECT headers exceed 64 KiB")
         head = data.split(b"\r\n\r\n", 1)[0].decode("latin1")
         lines = head.split("\r\n")
         parts = lines[0].split(" ")
         if len(parts) < 2 or parts[0] != "CONNECT":
             conn.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
-            return
+            raise RuntimeError("expected an HTTP CONNECT request")
         target = parts[1]
         if target.startswith("["):
             host, _, port_s = target[1:].split("]", 2)
@@ -66,8 +68,8 @@ def handle(conn, addr, log):
         t.start()
         pump(upstream, conn)
         t.join(timeout=5)
-    except Exception:
-        pass
+        if t.is_alive():
+            raise RuntimeError("CONNECT client-to-upstream pump did not stop")
     finally:
         try:
             conn.close()
@@ -86,9 +88,16 @@ def main():
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("127.0.0.1", port))
     srv.listen(50)
-    while True:
-        conn, addr = srv.accept()
-        threading.Thread(target=handle, args=(conn, addr, log), daemon=True).start()
+    ready_file = os.environ.get("WS_TEST_READY_FILE")
+    if ready_file:
+        with open(ready_file + ".tmp", "x", encoding="ascii"):
+            pass
+        os.replace(ready_file + ".tmp", ready_file)
+    conn, addr = srv.accept()
+    try:
+        handle(conn, addr, log)
+    finally:
+        srv.close()
 
 if __name__ == "__main__":
     main()

@@ -393,11 +393,9 @@ def test_22_proxy_tunnel():
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     assert _wait_port(up_port), "echo_server.py did not start"
 
-    px = subprocess.Popen(
+    px = _start_ready_process(
         [sys.executable, os.path.join(SERVERS_DIR, "connect_proxy_server.py"),
-         str(px_port), log],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    assert _wait_port(px_port), "connect_proxy_server.py did not start"
+         str(px_port), log], "connect_proxy_server.py")
 
     try:
         client_bin = _find_binary("proxy_test")
@@ -411,6 +409,8 @@ def test_22_proxy_tunnel():
         assert len(targets) >= 1, "proxy never received a CONNECT request"
         assert targets[0] == f"127.0.0.1:{up_port}", \
             f"unexpected CONNECT target: {targets[0]}"
+        _wait_server(px, "connect_proxy_server.py")
+        px = None
     finally:
         stop_process(px)
         stop_process(srv)

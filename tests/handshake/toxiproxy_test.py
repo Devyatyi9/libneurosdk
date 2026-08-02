@@ -26,7 +26,8 @@ Toxics:
 
 Requires toxiproxy-server in PATH or TOXIPROXY_BIN env var.
 """
-import argparse, asyncio, json, os, subprocess, sys, time, urllib.request
+import argparse, asyncio, json, os, socket, subprocess, sys, time
+import urllib.error, urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from test_utils import build_env, find_echo_test, stop_process
@@ -58,7 +59,7 @@ def start_toxiproxy():
     try:
         urllib.request.urlopen(f"http://127.0.0.1:{TOXIPROXY_PORT}/version", timeout=2)
         return None
-    except Exception:
+    except (OSError, urllib.error.URLError):
         pass
 
     bin_path = os.environ.get("TOXIPROXY_BIN")
@@ -74,9 +75,34 @@ def start_toxiproxy():
         if not bin_path:
             import shutil
             bin_path = shutil.which("toxiproxy-server") or "toxiproxy-server"
-    proc = subprocess.Popen([bin_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)
+    proc = subprocess.Popen([bin_path], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(
+                f"toxiproxy exited during startup ({proc.returncode}): "
+                f"{proc.stderr.read()}")
+        try:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{TOXIPROXY_PORT}/version", timeout=1)
+            break
+        except (OSError, urllib.error.URLError):
+            time.sleep(0.1)
+    else:
+        stop_process(proc)
+        raise RuntimeError("toxiproxy did not become ready within 10s")
     return proc
+
+def wait_port(port, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return
+        except OSError:
+            time.sleep(0.1)
+    raise RuntimeError(f"server on port {port} did not become ready within {timeout}s")
 
 def create_proxy(name, listen, upstream):
     data = json.dumps({"name": name, "listen": f"127.0.0.1:{listen}", "upstream": f"127.0.0.1:{upstream}"}).encode()
@@ -100,12 +126,13 @@ def add_bandwidth(proxy_name, rate):
     for s in ("upstream", "downstream"):
         add_toxic(proxy_name, {"type": "bandwidth", "attributes": {"rate": rate}}, stream=s)
 
-def delete_proxy(name):
+def delete_proxy(name, missing_ok=True):
     req = urllib.request.Request(f"{toxiproxy_url('/proxies')}/{name}", method="DELETE")
     try:
         urllib.request.urlopen(req, timeout=10)
-    except:
-        pass
+    except urllib.error.HTTPError as exc:
+        if not (missing_ok and exc.code == 404):
+            raise
 
 def apply_toxic(name, toxic_name):
     if toxic_name == "bandwidth":
@@ -191,11 +218,13 @@ async def run_mid_connection(toxic_name, proxy_port, up_port):
                 await ws.send(b"will this get through?")
                 await asyncio.wait_for(ws.recv(), timeout=5)
                 print("  unexpected: message received after timeout/reset")
+                rc = 1
             except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
                 pass
             await asyncio.sleep(1)
             if ws.state == websockets.State.OPEN:
                 print(f"  unexpected: connection still open after {toxic_name}")
+                rc = 1
             else:
                 print(f"  connection closed as expected ({toxic_name})")
         else:
@@ -231,8 +260,9 @@ def main():
 
     # Start echo server
     echo = subprocess.Popen([sys.executable, find_echo_server(), str(up_port)],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            text=True)
+    wait_port(up_port)
 
     # Start Toxiproxy
     toxiproxy = start_toxiproxy()
@@ -245,7 +275,10 @@ def main():
             echo_test_bin = args.test_path if args.test_path and os.path.exists(args.test_path) else find_echo_test()
             rc = run_pre_connect(toxic_name, echo_test_bin, proxy_port, up_port)
     finally:
-        delete_proxy("ws_test")
+        try:
+            delete_proxy("ws_test")
+        except (OSError, urllib.error.URLError):
+            pass
         if toxiproxy:
             stop_process(toxiproxy)
         stop_process(echo)
