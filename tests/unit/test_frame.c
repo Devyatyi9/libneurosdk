@@ -148,12 +148,12 @@ int main(void) {
 		int request_len = build_upgrade_request(request, sizeof(request),
 		                                        "localhost", 80, "/", "key");
 #ifdef WS_ENABLE_PERMESSAGE_DEFLATE
-		test("exact permessage-deflate offer",
+		test("parameterized permessage-deflate offer",
 		     request_len > 0 &&
 		         strstr(request,
-		                "Sec-WebSocket-Extensions: permessage-deflate\r\n") !=
-		             NULL &&
-		         strstr(request, "client_max_window_bits") == NULL);
+		                "Sec-WebSocket-Extensions: permessage-deflate; "
+		                "client_no_context_takeover; "
+		                "client_max_window_bits\r\n") != NULL);
 #else
 		test(
 		    "disabled build has no permessage-deflate offer",
@@ -176,6 +176,10 @@ int main(void) {
 		         agreed.client_no_context_takeover &&
 		         agreed.server_no_context_takeover &&
 		         agreed.server_max_window_bits == 12);
+		test("client window response accepted",
+		     parse_extensions("permessage-deflate; client_max_window_bits=9", 1,
+		                      &agreed) == 0 &&
+		         agreed.client_max_window_bits == 9);
 		test("duplicate parameter rejected",
 		     parse_extensions("permessage-deflate; server_no_context_takeover; "
 		                      "SERVER_NO_CONTEXT_TAKEOVER",
@@ -206,8 +210,11 @@ int main(void) {
 		}
 		test("unsolicited response rejected",
 		     parse_extensions("permessage-deflate", 0, &agreed) < 0);
-		test("client_max_window_bits response rejected",
-		     parse_extensions("permessage-deflate; client_max_window_bits=15", 1,
+		test("missing client window value rejected",
+		     parse_extensions("permessage-deflate; client_max_window_bits", 1,
+		                      &agreed) < 0);
+		test("out of range client window rejected",
+		     parse_extensions("permessage-deflate; client_max_window_bits=16", 1,
 		                      &agreed) < 0);
 		test("out of range server window rejected",
 		     parse_extensions("permessage-deflate; server_max_window_bits=7", 1,

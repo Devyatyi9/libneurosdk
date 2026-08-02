@@ -82,6 +82,7 @@ struct ws_permessage_deflate {
 	int negotiated;
 	int client_no_context_takeover;
 	int server_no_context_takeover;
+	unsigned char client_max_window_bits;
 	unsigned char server_max_window_bits;
 };
 
@@ -485,7 +486,8 @@ static int build_upgrade_request(char *buf,
 	                "Sec-WebSocket-Version: 13\r\n"
 	                "Sec-WebSocket-Key: %s\r\n"
 #ifdef WS_ENABLE_PERMESSAGE_DEFLATE
-	                "Sec-WebSocket-Extensions: permessage-deflate\r\n"
+	                "Sec-WebSocket-Extensions: permessage-deflate; "
+	                "client_no_context_takeover; client_max_window_bits\r\n"
 #endif
 	                "Origin: http://local.neuro-integration\r\n"
 	                "\r\n",
@@ -868,7 +870,7 @@ static int ws_token_equal(char const *token, size_t len, char const *expected) {
 	return strlen(expected) == len && strncasecmp(token, expected, len) == 0;
 }
 
-/* RFC 7692 response parser for the single, parameter-free client offer. */
+/* RFC 7692 response parser for the single client offer. */
 static int parse_permessage_deflate_response(
     char const *buf,
     size_t header_len,
@@ -943,6 +945,26 @@ static int parse_permessage_deflate_response(
 				return -1;
 			agreed->server_no_context_takeover = 1;
 		} else if (ws_token_equal(parameter, parameter_len,
+		                          "client_max_window_bits")) {
+			if (agreed->client_max_window_bits || p == end || *p != '=')
+				return -1;
+			p++;
+			SKIP_OWS();
+			char const *number = p;
+			while (p < end && *p >= '0' && *p <= '9')
+				p++;
+			size_t number_len = (size_t)(p - number);
+			if (number_len < 1 || number_len > 2 ||
+			    (number_len == 2 && number[0] == '0'))
+				return -1;
+			int bits = 0;
+			for (char const *q = number; q < p; q++)
+				bits = bits * 10 + (*q - '0');
+			if (bits < 8 || bits > 15)
+				return -1;
+			agreed->client_max_window_bits = (unsigned char)bits;
+			SKIP_OWS();
+		} else if (ws_token_equal(parameter, parameter_len,
 		                          "server_max_window_bits")) {
 			if (agreed->server_max_window_bits || p == end || *p != '=')
 				return -1;
@@ -963,7 +985,7 @@ static int parse_permessage_deflate_response(
 			agreed->server_max_window_bits = (unsigned char)bits;
 			SKIP_OWS();
 		} else {
-			return -1; /* includes client_max_window_bits, which was not offered */
+			return -1;
 		}
 		if (p < end && *p != ';')
 			return -1;
@@ -1237,7 +1259,10 @@ static int ws_send_data_frame(ws_t *ws,
 	unsigned char *compressed_data = NULL;
 	if (ws->pmd.negotiated) {
 		if (!ws->tx_deflater &&
-		    ws_deflate_compressor_create(&ws->tx_deflater) != WS_DEFLATE_OK) {
+		    ws_deflate_compressor_create(&ws->tx_deflater,
+		                                 ws->pmd.client_max_window_bits
+		                                     ? ws->pmd.client_max_window_bits
+		                                     : 15) != WS_DEFLATE_OK) {
 			ws_fail_message(ws, 1011, "failed to allocate WebSocket deflater");
 			return -1;
 		}

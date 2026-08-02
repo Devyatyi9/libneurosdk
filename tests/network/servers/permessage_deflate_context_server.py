@@ -8,6 +8,8 @@ from ws_frame import read_client_frame, read_http_upgrade
 
 
 TRAILER = b"\x00\x00\xff\xff"
+OFFER = (b"Sec-WebSocket-Extensions: permessage-deflate; "
+         b"client_no_context_takeover; client_max_window_bits\r\n")
 
 
 def encode(codec, payload):
@@ -24,7 +26,7 @@ def run(port, no_context):
     conn, _ = listener.accept()
     with conn:
         request, key = read_http_upgrade(conn)
-        if b"Sec-WebSocket-Extensions: permessage-deflate\r\n" not in request:
+        if OFFER not in request:
             raise AssertionError("missing permessage-deflate offer")
         parameters = "permessage-deflate"
         if no_context:

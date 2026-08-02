@@ -921,7 +921,7 @@ static MZ_FORCEINLINE void tdefl_find_match(tdefl_compressor *d, mz_uint lookahe
                 mz_uint probe_pos = d->m_hash[hash];
                 d->m_hash[hash] = (mz_uint16)lookahead_pos;
 
-                if (((cur_match_dist = (mz_uint16)(lookahead_pos - probe_pos)) <= dict_size) && ((TDEFL_READ_UNALIGNED_WORD32(d->m_dict + (probe_pos &= TDEFL_LZ_DICT_SIZE_MASK)) & 0xFFFFFF) == first_trigram))
+                if (((cur_match_dist = (mz_uint16)(lookahead_pos - probe_pos)) <= MZ_MIN(dict_size, d->m_max_match_distance)) && ((TDEFL_READ_UNALIGNED_WORD32(d->m_dict + (probe_pos &= TDEFL_LZ_DICT_SIZE_MASK)) & 0xFFFFFF) == first_trigram))
                 {
                     const mz_uint16 *p = (const mz_uint16 *)pCur_dict;
                     const mz_uint16 *q = (const mz_uint16 *)(d->m_dict + probe_pos);
@@ -1176,7 +1176,7 @@ static MZ_FORCEINLINE void tdefl_find_match(tdefl_compressor *d, mz_uint lookahe
             }
             else
             {
-                tdefl_find_match(d, d->m_lookahead_pos, d->m_dict_size, d->m_lookahead_size, &cur_match_dist, &cur_match_len);
+                tdefl_find_match(d, d->m_lookahead_pos, MZ_MIN(d->m_dict_size, d->m_max_match_distance), d->m_lookahead_size, &cur_match_dist, &cur_match_len);
             }
             if (((cur_match_len == TDEFL_MIN_MATCH_LEN) && (cur_match_dist >= 8U * 1024U)) || (cur_pos == cur_match_dist) || ((d->m_flags & TDEFL_FILTER_MATCHES) && (cur_match_len <= 5)))
             {
@@ -1343,6 +1343,7 @@ static MZ_FORCEINLINE void tdefl_find_match(tdefl_compressor *d, mz_uint lookahe
         d->m_pPut_buf_user = pPut_buf_user;
         d->m_flags = (mz_uint)(flags);
         d->m_max_probes[0] = 1 + ((flags & 0xFFF) + 2) / 3;
+        d->m_max_match_distance = TDEFL_LZ_DICT_SIZE;
         d->m_greedy_parsing = (flags & TDEFL_GREEDY_PARSING_FLAG) != 0;
         d->m_max_probes[1] = 1 + (((flags & 0xFFF) >> 2) + 2) / 3;
         if (!(flags & TDEFL_NONDETERMINISTIC_PARSING_FLAG))
@@ -1370,6 +1371,14 @@ static MZ_FORCEINLINE void tdefl_find_match(tdefl_compressor *d, mz_uint lookahe
             MZ_CLEAR_ARR(d->m_dict);
         memset(&d->m_huff_count[0][0], 0, sizeof(d->m_huff_count[0][0]) * TDEFL_MAX_HUFF_SYMBOLS_0);
         memset(&d->m_huff_count[1][0], 0, sizeof(d->m_huff_count[1][0]) * TDEFL_MAX_HUFF_SYMBOLS_1);
+        return TDEFL_STATUS_OKAY;
+    }
+
+    tdefl_status tdefl_set_max_match_distance(tdefl_compressor *d, mz_uint max_match_distance)
+    {
+        if ((!d) || (max_match_distance < 1) || (max_match_distance > TDEFL_LZ_DICT_SIZE))
+            return TDEFL_STATUS_BAD_PARAM;
+        d->m_max_match_distance = max_match_distance;
         return TDEFL_STATUS_OKAY;
     }
 

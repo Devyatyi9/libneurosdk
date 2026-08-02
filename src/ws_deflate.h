@@ -18,7 +18,8 @@ typedef enum ws_deflate_status {
 } ws_deflate_status;
 
 /* Context objects are small; the codec state is allocated on first use. */
-ws_deflate_status ws_deflate_compressor_create(ws_deflate_compressor **context);
+ws_deflate_status ws_deflate_compressor_create(ws_deflate_compressor **context,
+                                               unsigned int window_bits);
 ws_deflate_status ws_deflate_decompressor_create(
     ws_deflate_decompressor **context);
 

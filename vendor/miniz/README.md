@@ -8,7 +8,7 @@ permessage-deflate implementation.
 - Commit: `77d0dce8627735138c51770d1799a1ef48f2117d`
 - License: MIT (`LICENSE`)
 
-Copied upstream files, byte-for-byte:
+Vendored upstream files:
 
 - `miniz.c`
 - `miniz.h`
@@ -19,6 +19,9 @@ Copied upstream files, byte-for-byte:
 - `miniz_tinfl.h`
 - `LICENSE`
 
-`miniz_export.h` is a local static-build shim. ZIP/archive files, examples,
-tests, tools, and build-system files are intentionally excluded. In
-particular, no `miniz_zip.c` or `miniz_zip.h` is vendored.
+All listed files except `miniz_tdef.c/.h` are copied byte-for-byte.
+`miniz_export.h` is a local static-build shim. `miniz_tdef.c/.h` add a runtime
+maximum match distance used to implement RFC 7692 negotiated window limits.
+ZIP/archive files, examples, tests, tools, and build-system files are
+intentionally excluded. In particular, no `miniz_zip.c` or `miniz_zip.h` is
+vendored.

@@ -11,6 +11,7 @@
 
 struct ws_deflate_compressor {
 	mz_stream *stream;
+	unsigned int window_bits;
 };
 
 struct ws_deflate_decompressor {
@@ -76,12 +77,15 @@ static ws_deflate_status ws_deflate_init_stream(mz_stream **stream,
 	return WS_DEFLATE_OK;
 }
 
-ws_deflate_status ws_deflate_compressor_create(
-    ws_deflate_compressor **context) {
-	if (!context)
+ws_deflate_status ws_deflate_compressor_create(ws_deflate_compressor **context,
+                                               unsigned int window_bits) {
+	if (!context || window_bits < 8 || window_bits > 15)
 		return WS_DEFLATE_INVALID_ARGUMENT;
 	*context = calloc(1, sizeof(**context));
-	return *context ? WS_DEFLATE_OK : WS_DEFLATE_OUT_OF_MEMORY;
+	if (!*context)
+		return WS_DEFLATE_OUT_OF_MEMORY;
+	(*context)->window_bits = window_bits;
+	return WS_DEFLATE_OK;
 }
 
 ws_deflate_status ws_deflate_decompressor_create(
@@ -153,6 +157,10 @@ ws_deflate_status ws_deflate_compress(ws_deflate_compressor *context,
 	status = ws_deflate_init_stream(&context->stream, true);
 	if (status != WS_DEFLATE_OK)
 		return status;
+	if (tdefl_set_max_match_distance((tdefl_compressor *)context->stream->state,
+	                                 1U << context->window_bits) !=
+	    TDEFL_STATUS_OKAY)
+		return WS_DEFLATE_CODEC_ERROR;
 
 	do {
 		size_t remaining = input_size - consumed;

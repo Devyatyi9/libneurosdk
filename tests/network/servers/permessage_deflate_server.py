@@ -9,6 +9,8 @@ from ws_frame import (OPCODE_BINARY, OPCODE_CLOSE, OPCODE_CONT, OPCODE_PING,
 
 
 TRAILER = b"\x00\x00\xff\xff"
+OFFER = (b"Sec-WebSocket-Extensions: permessage-deflate; "
+         b"client_no_context_takeover; client_max_window_bits\r\n")
 
 
 def compress_message(codec, payload):
@@ -28,13 +30,13 @@ def run(port, mode):
         conn, _ = listener.accept()
         with conn:
             request, key = read_http_upgrade(conn)
-            expected = b"Sec-WebSocket-Extensions: permessage-deflate\r\n"
-            if expected not in request or b"client_max_window_bits" in request:
+            if OFFER not in request:
                 raise AssertionError("client did not send the exact RFC 7692 offer")
             if mode == "decline":
                 conn.sendall(make_101(key))
             else:
                 params = ("permessage-deflate; server_max_window_bits=12; "
+                          "client_max_window_bits=9; "
                           "client_no_context_takeover; server_no_context_takeover")
                 conn.sendall(make_101(key, params))
 

@@ -17,7 +17,7 @@ def run(port, mode):
     conn, _ = listener.accept()
     with conn:
         request, key = read_http_upgrade(conn)
-        offered = b"Sec-WebSocket-Extensions: permessage-deflate\r\n" in request
+        offered = b"Sec-WebSocket-Extensions: permessage-deflate; " in request
         if not offered:
             raise AssertionError("missing permessage-deflate offer")
         negotiated = mode != "unnegotiated"

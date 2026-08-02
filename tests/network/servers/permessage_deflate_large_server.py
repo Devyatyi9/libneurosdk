@@ -20,7 +20,7 @@ def run(port):
     conn, _ = listener.accept()
     with conn:
         request, key = read_http_upgrade(conn)
-        if b"Sec-WebSocket-Extensions: permessage-deflate\r\n" not in request:
+        if b"Sec-WebSocket-Extensions: permessage-deflate; " not in request:
             raise AssertionError("client did not offer permessage-deflate")
         conn.sendall(make_101(key, "permessage-deflate"))
 

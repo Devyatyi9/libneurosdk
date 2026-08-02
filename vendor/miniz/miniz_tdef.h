@@ -138,7 +138,7 @@ enum
     {
         tdefl_put_buf_func_ptr m_pPut_buf_func;
         void *m_pPut_buf_user;
-        mz_uint m_flags, m_max_probes[2];
+        mz_uint m_flags, m_max_probes[2], m_max_match_distance;
         int m_greedy_parsing;
         mz_uint m_adler32, m_lookahead_pos, m_lookahead_size, m_dict_size;
         mz_uint8 *m_pLZ_code_buf, *m_pLZ_flags, *m_pOutput_buf, *m_pOutput_buf_end;
@@ -167,6 +167,7 @@ enum
     /* If pBut_buf_func is NULL the user should always call the tdefl_compress() API. */
     /* flags: See the above enums (TDEFL_HUFFMAN_ONLY, TDEFL_WRITE_ZLIB_HEADER, etc.) */
     MINIZ_EXPORT tdefl_status tdefl_init(tdefl_compressor *d, tdefl_put_buf_func_ptr pPut_buf_func, void *pPut_buf_user, int flags);
+    MINIZ_EXPORT tdefl_status tdefl_set_max_match_distance(tdefl_compressor *d, mz_uint max_match_distance);
 
     /* Compresses a block of data, consuming as much of the specified input buffer as possible, and writing as much compressed data to the specified output buffer as possible. */
     MINIZ_EXPORT tdefl_status tdefl_compress(tdefl_compressor *d, const void *pIn_buf, size_t *pIn_buf_size, void *pOut_buf, size_t *pOut_buf_size, tdefl_flush flush);
