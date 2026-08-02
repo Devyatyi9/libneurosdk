@@ -4,8 +4,11 @@ project(uws_echo LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+if(WIN32)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
-add_definitions(-DUWS_NO_SSL -DUWS_NO_ZLIB -DLIBUS_NO_SSL)
+add_definitions(-DUWS_NO_SSL -DLIBUS_NO_SSL)
 
 # uWebSockets headers
 set(UWS_DIR "${CMAKE_SOURCE_DIR}/uWebSockets")
@@ -32,22 +35,9 @@ endif()
 add_executable(uws_echo uws_echo.cpp ${USOCKETS_SRC})
 target_include_directories(uws_echo PRIVATE "${UWS_DIR}/src" "${USOCKETS_DIR}/src")
 
-# zlib — needed by uWS PerMessageDeflate even with UWS_NO_ZLIB
-if(WIN32)
-    find_package(ZLIB QUIET)
-    if(ZLIB_FOUND)
-        target_link_libraries(uws_echo PRIVATE ZLIB::ZLIB)
-    else()
-        find_path(ZLIB_INCLUDE_DIR zlib.h)
-        find_library(ZLIB_LIBRARY zlib)
-        if(ZLIB_INCLUDE_DIR AND ZLIB_LIBRARY)
-            target_include_directories(uws_echo PRIVATE "${ZLIB_INCLUDE_DIR}")
-            target_link_libraries(uws_echo PRIVATE "${ZLIB_LIBRARY}")
-        endif()
-    endif()
-else()
-    target_link_libraries(uws_echo PRIVATE z)
-endif()
+# zlib is required by uWS permessage-deflate.
+find_package(ZLIB REQUIRED)
+target_link_libraries(uws_echo PRIVATE ZLIB::ZLIB)
 
 if(WIN32)
     if(libuv_FOUND)

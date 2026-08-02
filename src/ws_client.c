@@ -474,6 +474,12 @@ static int build_upgrade_request(char *buf,
                                  uint16_t port,
                                  char const *path,
                                  char const *key) {
+	char const *extensions = "";
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+	extensions =
+	    "Sec-WebSocket-Extensions: permessage-deflate; "
+	    "client_no_context_takeover; client_max_window_bits\r\n";
+#endif
 	/* RFC 3986 §3.2.2: IPv6 literals in the Host header MUST be bracketed.
 	 * A colon in the host means it's a literal v6 address (hostnames can't
 	 * contain ':'). */
@@ -485,14 +491,11 @@ static int build_upgrade_request(char *buf,
 	                "Connection: Upgrade\r\n"
 	                "Sec-WebSocket-Version: 13\r\n"
 	                "Sec-WebSocket-Key: %s\r\n"
-#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
-	                "Sec-WebSocket-Extensions: permessage-deflate; "
-	                "client_no_context_takeover; client_max_window_bits\r\n"
-#endif
+	                "%s"
 	                "Origin: http://local.neuro-integration\r\n"
 	                "\r\n",
-	                path, is_ipv6 ? "[" : "", host, is_ipv6 ? "]" : "", port,
-	                key);
+	                path, is_ipv6 ? "[" : "", host, is_ipv6 ? "]" : "", port, key,
+	                extensions);
 }
 
 static int generate_key(char *out, size_t size) {

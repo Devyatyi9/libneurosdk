@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build, start uWS echo-server and run echo_test against it."""
-import os, platform, subprocess, sys, time
+import os, platform, socket, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
@@ -26,12 +26,10 @@ def main():
             machine = platform.machine().lower()
             arch = "x64" if machine in ("amd64", "x86_64", "arm64") else "x86"
             triplet = f"{arch}-windows-static"
-            subprocess.check_call(["vcpkg", "install", f"libuv:{triplet}"])
-            pkg_dir = f"{vcpkg_root}/packages/libuv_{triplet}"
-            if os.path.isdir(pkg_dir):
-                cmake_args.append(f"-DCMAKE_PREFIX_PATH={pkg_dir}")
-            else:
-                cmake_args.append(f"-DCMAKE_PREFIX_PATH={vcpkg_root}/installed/{triplet}")
+            subprocess.check_call(["vcpkg", "install", f"libuv:{triplet}",
+                                   f"zlib:{triplet}"])
+            cmake_args.append(
+                f"-DCMAKE_PREFIX_PATH={vcpkg_root}/installed/{triplet}")
         subprocess.check_call(cmake_args)
         subprocess.check_call(["cmake", "--build", build_dir, "--config", "Release"])
         src = os.path.join(build_dir, "Release" if sys.platform == "win32" else "",
@@ -41,21 +39,51 @@ def main():
             shutil.copy2(src, uws_bin)
 
     # Start uWS echo-server
-    uws = subprocess.Popen([uws_bin, str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)
+    uws = subprocess.Popen([uws_bin, str(port)], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if uws.poll() is not None:
+            print(f"uWS exited during startup ({uws.returncode}): {uws.stderr.read()}")
+            return 1
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        uws.terminate()
+        try:
+            uws.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            uws.kill()
+            uws.wait(timeout=10)
+        print("uWS did not become ready within 10s")
+        return 1
 
     # Run echo_test
     echo_bin = find_echo_test()
     url = f"ws://127.0.0.1:{port}/"
-    rc = subprocess.call([echo_bin, url], env=build_env(echo_bin))
-
-    uws.terminate()
-    uws.wait()
+    try:
+        rc = subprocess.run([echo_bin, url], env=build_env(echo_bin),
+                            timeout=30).returncode
+    except subprocess.TimeoutExpired:
+        print("uWS echo test FAILED (echo_test timed out after 30s)")
+        rc = 1
+    finally:
+        if uws.poll() is None:
+            uws.terminate()
+        try:
+            uws.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            uws.kill()
+            uws.wait(timeout=10)
 
     if rc != 0:
         print(f"uWS echo test FAILED (exit={rc})")
-        sys.exit(1)
+        return 1
     print("uWS echo test: OK")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -145,12 +145,23 @@ def main():
             time.sleep(0.3)
 
     if not ok:
-        err = nginx.stderr.read().decode(errors="replace") if nginx.stderr else ""
+        nginx.terminate()
+        try:
+            _, stderr = nginx.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            nginx.kill()
+            _, stderr = nginx.communicate(timeout=10)
+        err = stderr.decode(errors="replace") if stderr else ""
         print(f"nginx did not start on proxy port")
         if err:
             print(f"  nginx stderr: {err.strip()}")
-        nginx.terminate(); nginx.wait()
-        upstream.terminate(); upstream.wait()
+        if upstream.poll() is None:
+            upstream.terminate()
+        try:
+            upstream.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            upstream.kill()
+            upstream.wait(timeout=10)
         return 1
 
     # Verify that nginx forwards a real WebSocket Upgrade to the upstream.
@@ -196,10 +207,20 @@ def main():
     # Run echo_test through nginx proxy
     url = f"ws://127.0.0.1:{proxy_port}/"
     env = build_env(echo_bin)
-    rc = subprocess.call([echo_bin, url], env=env)
-
-    nginx.terminate(); nginx.wait()
-    upstream.terminate(); upstream.wait()
+    try:
+        rc = subprocess.run([echo_bin, url], env=env, timeout=30).returncode
+    except subprocess.TimeoutExpired:
+        print("nginx proxy test FAILED (echo_test timed out after 30s)")
+        rc = 1
+    finally:
+        for proc in (nginx, upstream):
+            if proc.poll() is None:
+                proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=10)
 
     if not nginx_upgrade_ok or not upstream_upgrade_ok:
         print("nginx proxy test FAILED (HTTP Upgrade did not return 101)")
