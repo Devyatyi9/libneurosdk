@@ -24,9 +24,9 @@ def mark_server_ready():
         os.replace(temporary, path)
 
 
-def build_frame(opcode, payload=b"", fin=True):
+def build_frame(opcode, payload=b"", fin=True, rsv1=False):
     buf = bytearray()
-    b0 = (0x80 if fin else 0) | (opcode & 0x0f)
+    b0 = (0x80 if fin else 0) | (0x40 if rsv1 else 0) | (opcode & 0x0f)
     buf.append(b0)
     plen = len(payload)
     if plen < 126:
@@ -72,15 +72,19 @@ def compute_accept(client_key):
     return base64.b64encode(sha1).decode()
 
 
-def make_101(client_key):
+def make_101(client_key, extensions=None):
     """Build a full HTTP 101 upgrade response for a given client key."""
     accept = compute_accept(client_key)
+    extension_header = (
+        b"Sec-WebSocket-Extensions: " + extensions.encode("ascii") + b"\r\n"
+        if extensions else b""
+    )
     return (
         b"HTTP/1.1 101 Switching Protocols\r\n"
         b"Upgrade: websocket\r\n"
         b"Connection: Upgrade\r\n"
-        b"Sec-WebSocket-Accept: " + accept.encode() + b"\r\n"
-        b"\r\n"
+        b"Sec-WebSocket-Accept: " + accept.encode() + b"\r\n" + extension_header
+        + b"\r\n"
     )
 
 
@@ -152,7 +156,7 @@ def recv_exact(conn, size):
     return bytes(data)
 
 
-def read_client_frame(conn):
+def read_client_frame(conn, allow_rsv1=False, include_rsv1=False):
     """Read and unmask one complete client frame."""
     head = recv_exact(conn, 2)
     fin = bool(head[0] & 0x80)
@@ -160,7 +164,7 @@ def read_client_frame(conn):
     opcode = head[0] & 0x0f
     masked = bool(head[1] & 0x80)
     length = head[1] & 0x7f
-    if rsv:
+    if rsv & 0x30 or (rsv & 0x40 and not allow_rsv1):
         raise ConnectionError("client frame has non-zero RSV bits")
     if not masked:
         raise ConnectionError("client frame is not masked")
@@ -174,4 +178,7 @@ def read_client_frame(conn):
     payload = bytearray(recv_exact(conn, length))
     for i in range(length):
         payload[i] ^= mask[i & 3]
-    return fin, opcode, bytes(payload)
+    result = (fin, opcode, bytes(payload))
+    if include_rsv1:
+        return result + (bool(rsv & 0x40),)
+    return result

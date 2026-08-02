@@ -1,8 +1,17 @@
 #include "ws_deflate.h"
 
-#include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#define assert(condition)                                                    \
+	do {                                                                       \
+		if (!(condition)) {                                                      \
+			fprintf(stderr, "assertion failed at %s:%d: %s\n", __FILE__, __LINE__, \
+			        #condition);                                                   \
+			exit(EXIT_FAILURE);                                                    \
+		}                                                                        \
+	} while (0)
 
 static void assert_roundtrip(ws_deflate_compressor *compressor,
                              ws_deflate_decompressor *decompressor,

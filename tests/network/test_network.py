@@ -149,6 +149,58 @@ def test_7_normal_close():
     assert rc == 0, f"echo_test normal close failed (exit {rc})"
 
 
+@pytest.mark.parametrize("mode,port", [("parameterized", 19120), ("decline", 19121)])
+def test_permessage_deflate_raw_wire(mode, port):
+    """RFC 7692 offer, TX/RX text+binary, fragmentation and decline paths."""
+    srv = _start_server("permessage_deflate_server.py", port, mode)
+    client_bin = _find_binary("integration_test")
+    assert client_bin, "integration_test binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
+    _wait_server(srv, "permessage_deflate_server.py")
+    assert rc == 0, f"permessage-deflate {mode} test failed (exit {rc})"
+
+
+@pytest.mark.parametrize("mode,message,port", [
+    ("malformed", "malformed compressed WebSocket message", 19122),
+    ("limit", "decompressed message exceeds size limit", 19128),
+    ("unnegotiated", "invalid RSV1 bit", 19123),
+    ("control-rsv1", "invalid RSV1 bit", 19124),
+    ("continuation-rsv1", "invalid RSV1 bit", 19125),
+])
+def test_permessage_deflate_invalid_frames(mode, message, port):
+    """Malformed DEFLATE and forbidden RSV1 uses close with protocol error."""
+    srv = _start_server("permessage_deflate_negative_server.py", port, mode)
+    client_bin = _find_binary("test_negative")
+    assert client_bin, "test_negative binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     "error-after-open", message)
+    _wait_server(srv, "permessage_deflate_negative_server.py")
+    assert rc == 0, f"permessage-deflate negative {mode} failed (exit {rc})"
+
+
+@pytest.mark.parametrize("mode,port", [("takeover", 19126), ("no-context", 19127)])
+def test_permessage_deflate_context_lifetime(mode, port):
+    """TX and RX dictionaries persist or reset according to directional params."""
+    srv = _start_server("permessage_deflate_context_server.py", port, mode)
+    client_bin = _find_binary("test_pmd")
+    assert client_bin, "test_pmd binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/")
+    _wait_server(srv, "permessage_deflate_context_server.py")
+    assert rc == 0, f"permessage-deflate context test failed (exit {rc})"
+
+
+def test_permessage_deflate_large_wire_frame():
+    """Compressed wire payloads larger than recv_buf use streaming assembly."""
+    port = 19129
+    srv = _start_server("permessage_deflate_large_server.py", port)
+    client_bin = _find_binary("test_large_frame")
+    assert client_bin, "test_large_frame binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     str(512 * 1024), "binary")
+    _wait_server(srv, "permessage_deflate_large_server.py")
+    assert rc == 0, f"large compressed wire frame test failed (exit {rc})"
+
+
 # ---- Network I/O Edge Cases (#8-#20) ----
 
 def test_8_drip_feed():

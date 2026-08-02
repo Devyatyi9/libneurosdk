@@ -109,6 +109,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_compile_definitions(${PROJECT_NAME} PRIVATE
 	LIB_VERSION=${PROJECT_VERSION}
 	LIB_BUILD_HASH=${LIB_BUILD_HASH}
+	$<$<BOOL:${ENABLE_PERMESSAGE_DEFLATE}>:WS_ENABLE_PERMESSAGE_DEFLATE>
 )
 
 if(WIN32)
@@ -133,6 +134,7 @@ if(NEURO_BUILD_TESTS)
 	add_library(ws_client_test STATIC src/ws_client.c)
 	target_include_directories(ws_client_test PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 	if(ENABLE_PERMESSAGE_DEFLATE)
+		target_compile_definitions(ws_client_test PRIVATE WS_ENABLE_PERMESSAGE_DEFLATE)
 		target_sources(ws_client_test PRIVATE
 			$<TARGET_OBJECTS:ws_deflate>
 			$<TARGET_OBJECTS:neuro_miniz>
@@ -168,13 +170,18 @@ if(NEURO_BUILD_TESTS)
 				$<TARGET_OBJECTS:neuro_miniz>
 			)
 		endif()
+		if(ENABLE_PERMESSAGE_DEFLATE AND NOT t STREQUAL "test_ws_deflate")
+			target_compile_definitions(${t} PRIVATE WS_ENABLE_PERMESSAGE_DEFLATE)
+			target_sources(${t} PRIVATE $<TARGET_OBJECTS:ws_deflate>
+				$<TARGET_OBJECTS:neuro_miniz>)
+		endif()
 		if(WIN32)
 			target_link_libraries(${t} PRIVATE ws2_32 bcrypt)
 		endif()
 	endforeach()
 
 	# Network I/O test clients exercise ws_client directly.
-	set(NET_TESTS test_partial_send test_flood test_double_close test_oversize proxy_test test_large_frame test_peer_close test_negative)
+	set(NET_TESTS test_partial_send test_flood test_double_close test_oversize proxy_test test_large_frame test_peer_close test_negative test_pmd)
 	foreach(t ${NET_TESTS})
 		add_executable(${t} tests/network/${t}.c)
 		target_link_libraries(${t} PRIVATE ws_client_test)

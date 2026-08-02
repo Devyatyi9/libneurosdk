@@ -14,6 +14,24 @@ static void test(char const *name, int cond) {
 	}
 }
 
+static int parse_extensions(char const *extension,
+                            int offered,
+                            struct ws_permessage_deflate *agreed) {
+	char response[512];
+	int len;
+	if (extension) {
+		len = snprintf(response, sizeof(response),
+		               "HTTP/1.1 101 Switching Protocols\r\n"
+		               "Sec-WebSocket-Extensions: %s\r\n\r\n",
+		               extension);
+	} else {
+		len = snprintf(response, sizeof(response),
+		               "HTTP/1.1 101 Switching Protocols\r\n\r\n");
+	}
+	return parse_permessage_deflate_response(response, (size_t)len, offered,
+	                                         agreed);
+}
+
 /* Parse a frame header (reverse of ws_build_frame_header).
  * Returns header length (incl. 4 mask bytes) or -1. */
 static int parse_frame_header(unsigned char const *buf,
@@ -118,6 +136,86 @@ int main(void) {
 	hlen = (int)ws_build_frame_header(hdr, 0x8, 1, 2);
 	test("close header opcode", hdr[0] == 0x88);
 	test("close length 2", (hdr[1] & 0x7f) == 2);
+
+	/* permessage-deflate puts RSV1 on data frames before masking. */
+	hlen = (int)ws_build_data_frame_header(hdr, 0x1, 1, 12);
+	test("compressed text RSV1 header", hlen == 2 && hdr[0] == 0xc1);
+	hlen = (int)ws_build_data_frame_header(hdr, 0x2, 0, 12);
+	test("uncompressed binary has no RSV1", hlen == 2 && hdr[0] == 0x82);
+
+	{
+		char request[1024];
+		int request_len = build_upgrade_request(request, sizeof(request),
+		                                        "localhost", 80, "/", "key");
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+		test("exact permessage-deflate offer",
+		     request_len > 0 &&
+		         strstr(request,
+		                "Sec-WebSocket-Extensions: permessage-deflate\r\n") !=
+		             NULL &&
+		         strstr(request, "client_max_window_bits") == NULL);
+#else
+		test(
+		    "disabled build has no permessage-deflate offer",
+		    request_len > 0 && strstr(request, "Sec-WebSocket-Extensions") == NULL);
+#endif
+	}
+
+	{
+		struct ws_permessage_deflate agreed;
+		test("extension decline accepted",
+		     parse_extensions(NULL, 1, &agreed) == 0 && !agreed.negotiated);
+		test("bare permessage-deflate accepted",
+		     parse_extensions("permessage-deflate", 1, &agreed) == 0 &&
+		         agreed.negotiated);
+		test("parameterized response accepted",
+		     parse_extensions(
+		         "PerMessage-Deflate; CLIENT_NO_CONTEXT_TAKEOVER; "
+		         "server_no_context_takeover; server_max_window_bits = 12",
+		         1, &agreed) == 0 &&
+		         agreed.client_no_context_takeover &&
+		         agreed.server_no_context_takeover &&
+		         agreed.server_max_window_bits == 12);
+		test("duplicate parameter rejected",
+		     parse_extensions("permessage-deflate; server_no_context_takeover; "
+		                      "SERVER_NO_CONTEXT_TAKEOVER",
+		                      1, &agreed) < 0);
+		test("unknown parameter rejected",
+		     parse_extensions("permessage-deflate; unknown", 1, &agreed) < 0);
+		test("malformed quoted value rejected",
+		     parse_extensions("permessage-deflate; server_max_window_bits=\"12\"",
+		                      1, &agreed) < 0);
+		test("missing server window value rejected",
+		     parse_extensions("permessage-deflate; server_max_window_bits=", 1,
+		                      &agreed) < 0);
+		test("missing parameter separator rejected",
+		     parse_extensions("permessage-deflate server_no_context_takeover", 1,
+		                      &agreed) < 0);
+		test("extension list rejected",
+		     parse_extensions("permessage-deflate, permessage-deflate", 1,
+		                      &agreed) < 0);
+		{
+			char const duplicate_headers[] =
+			    "HTTP/1.1 101 Switching Protocols\r\n"
+			    "Sec-WebSocket-Extensions: permessage-deflate\r\n"
+			    "Sec-WebSocket-Extensions: permessage-deflate\r\n\r\n";
+			test("duplicate extension header rejected",
+			     parse_permessage_deflate_response(duplicate_headers,
+			                                       sizeof(duplicate_headers) - 1, 1,
+			                                       &agreed) < 0);
+		}
+		test("unsolicited response rejected",
+		     parse_extensions("permessage-deflate", 0, &agreed) < 0);
+		test("client_max_window_bits response rejected",
+		     parse_extensions("permessage-deflate; client_max_window_bits=15", 1,
+		                      &agreed) < 0);
+		test("out of range server window rejected",
+		     parse_extensions("permessage-deflate; server_max_window_bits=7", 1,
+		                      &agreed) < 0);
+		test("non-canonical server window rejected",
+		     parse_extensions("permessage-deflate; server_max_window_bits=08", 1,
+		                      &agreed) < 0);
+	}
 
 	/* Masking: apply -> unmask round trip */
 	{

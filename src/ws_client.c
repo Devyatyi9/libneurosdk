@@ -7,6 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+#include "ws_deflate.h"
+#endif
+
 /* ================================================================== */
 /*  Platform detection                                                 */
 /* ================================================================== */
@@ -72,6 +76,14 @@ typedef int SOCKET;
 /*  Internal structures                                                 */
 /* ================================================================== */
 #define WS_RECV_BUF_SIZE 262144
+#define WS_DECOMPRESSED_MAX (16U * 1024U * 1024U)
+
+struct ws_permessage_deflate {
+	int negotiated;
+	int client_no_context_takeover;
+	int server_no_context_takeover;
+	unsigned char server_max_window_bits;
+};
 
 struct ws_t {
 	ws_state_e state;
@@ -107,6 +119,7 @@ struct ws_t {
 	/* Fragmented-message reassembly (FIN=0 ... continuation ... FIN=1) */
 	int frag_active;
 	int frag_binary;
+	int frag_compressed;
 	unsigned char *frag_buf;
 	size_t frag_len;
 	size_t frag_cap;
@@ -118,6 +131,7 @@ struct ws_t {
 	int stream_active; /* currently streaming a large frame */
 	int stream_fin;    /* FIN bit of the streamed frame */
 	unsigned char stream_opcode;
+	int stream_compressed;
 	int stream_masked; /* frame carried a client mask (defensive) */
 	unsigned char stream_mask[4];
 	uint64_t stream_payload_len;   /* total payload length of the frame */
@@ -129,6 +143,12 @@ struct ws_t {
 	uint16_t peer_close_code;
 	char peer_close_reason[123];
 	size_t peer_close_reason_len;
+
+	struct ws_permessage_deflate pmd;
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+	ws_deflate_compressor *tx_deflater;
+	ws_deflate_decompressor *rx_inflater;
+#endif
 };
 
 /* ================================================================== */
@@ -442,6 +462,7 @@ static void base64_encode(unsigned char const *in,
                           size_t inlen,
                           char *out,
                           size_t outsize);
+static int ws_fail_message(ws_t *ws, uint16_t code, char const *message);
 
 /* ================================================================== */
 /*  HTTP upgrade                                                        */
@@ -463,6 +484,9 @@ static int build_upgrade_request(char *buf,
 	                "Connection: Upgrade\r\n"
 	                "Sec-WebSocket-Version: 13\r\n"
 	                "Sec-WebSocket-Key: %s\r\n"
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+	                "Sec-WebSocket-Extensions: permessage-deflate\r\n"
+#endif
 	                "Origin: http://local.neuro-integration\r\n"
 	                "\r\n",
 	                path, is_ipv6 ? "[" : "", host, is_ipv6 ? "]" : "", port,
@@ -832,13 +856,132 @@ static int no_proxy_match(char const *no_proxy, char const *host) {
 /*  HTTP upgrade response parser                                        */
 /* ================================================================== */
 
+static int ws_token_char(unsigned char c) {
+	return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+	       (c >= 'a' && c <= 'z') || c == '!' || c == '#' || c == '$' ||
+	       c == '%' || c == '&' || c == '\'' || c == '*' || c == '+' ||
+	       c == '-' || c == '.' || c == '^' || c == '_' || c == '`' || c == '|' ||
+	       c == '~';
+}
+
+static int ws_token_equal(char const *token, size_t len, char const *expected) {
+	return strlen(expected) == len && strncasecmp(token, expected, len) == 0;
+}
+
+/* RFC 7692 response parser for the single, parameter-free client offer. */
+static int parse_permessage_deflate_response(
+    char const *buf,
+    size_t header_len,
+    int offered,
+    struct ws_permessage_deflate *agreed) {
+	char const *value = NULL;
+	size_t value_len = 0;
+	int extension_headers = 0;
+	size_t line_start = 0;
+
+	memset(agreed, 0, sizeof(*agreed));
+	while (line_start + 2 <= header_len) {
+		size_t line_end = line_start;
+		while (line_end + 1 < header_len &&
+		       !(buf[line_end] == '\r' && buf[line_end + 1] == '\n'))
+			line_end++;
+		if (line_end + 1 >= header_len)
+			return -1;
+		if (line_end == line_start)
+			break;
+		if (line_start != 0) {
+			char const *colon = memchr(buf + line_start, ':', line_end - line_start);
+			if (!colon)
+				return -1;
+			size_t name_len = (size_t)(colon - (buf + line_start));
+			if (ws_token_equal(buf + line_start, name_len,
+			                   "Sec-WebSocket-Extensions")) {
+				extension_headers++;
+				value = colon + 1;
+				value_len = (size_t)((buf + line_end) - value);
+			}
+		}
+		line_start = line_end + 2;
+	}
+	if (extension_headers == 0)
+		return 0;
+	if (!offered || extension_headers != 1)
+		return -1;
+
+	char const *p = value;
+	char const *end = value + value_len;
+#define SKIP_OWS()                             \
+	while (p < end && (*p == ' ' || *p == '\t')) \
+	p++
+	SKIP_OWS();
+	char const *name = p;
+	while (p < end && ws_token_char((unsigned char)*p))
+		p++;
+	if (!ws_token_equal(name, (size_t)(p - name), "permessage-deflate"))
+		return -1;
+	SKIP_OWS();
+	while (p < end) {
+		if (*p != ';')
+			return -1; /* rejects lists and malformed separators */
+		p++;
+		SKIP_OWS();
+		char const *parameter = p;
+		while (p < end && ws_token_char((unsigned char)*p))
+			p++;
+		size_t parameter_len = (size_t)(p - parameter);
+		if (parameter_len == 0)
+			return -1;
+		SKIP_OWS();
+		if (ws_token_equal(parameter, parameter_len,
+		                   "client_no_context_takeover")) {
+			if (agreed->client_no_context_takeover || (p < end && *p == '='))
+				return -1;
+			agreed->client_no_context_takeover = 1;
+		} else if (ws_token_equal(parameter, parameter_len,
+		                          "server_no_context_takeover")) {
+			if (agreed->server_no_context_takeover || (p < end && *p == '='))
+				return -1;
+			agreed->server_no_context_takeover = 1;
+		} else if (ws_token_equal(parameter, parameter_len,
+		                          "server_max_window_bits")) {
+			if (agreed->server_max_window_bits || p == end || *p != '=')
+				return -1;
+			p++;
+			SKIP_OWS();
+			char const *number = p;
+			while (p < end && *p >= '0' && *p <= '9')
+				p++;
+			size_t number_len = (size_t)(p - number);
+			if (number_len < 1 || number_len > 2 ||
+			    (number_len == 2 && number[0] == '0'))
+				return -1;
+			int bits = 0;
+			for (char const *q = number; q < p; q++)
+				bits = bits * 10 + (*q - '0');
+			if (bits < 8 || bits > 15)
+				return -1;
+			agreed->server_max_window_bits = (unsigned char)bits;
+			SKIP_OWS();
+		} else {
+			return -1; /* includes client_max_window_bits, which was not offered */
+		}
+		if (p < end && *p != ';')
+			return -1;
+	}
+#undef SKIP_OWS
+	agreed->negotiated = 1;
+	return 0;
+}
+
 /* Looks for the end of the HTTP header block ("\r\n\r\n") before
  * declaring the upgrade done, reports header length, AND verifies the
  * Sec-WebSocket-Accept header (RFC 6455 §4.2.2) against our key. */
 static int parse_upgrade_response(char const *buf,
                                   size_t len,
                                   size_t *header_len_out,
-                                  char const *expected_key) {
+                                  char const *expected_key,
+                                  int extensions_offered,
+                                  struct ws_permessage_deflate *agreed) {
 	if (len >= 12 && memcmp(buf, "HTTP/1.1 ", 9) == 0 &&
 	    memcmp(buf, "HTTP/1.1 101", 12) != 0) {
 		return -1; /* non-101 status, fail fast even before full headers arrive */
@@ -888,6 +1031,9 @@ static int parse_upgrade_response(char const *buf,
 		}
 	}
 	if (!has_upgrade || !has_conn)
+		return -1;
+	if (parse_permessage_deflate_response(buf, *header_len_out,
+	                                      extensions_offered, agreed) != 0)
 		return -1;
 
 	/* Verify Sec-WebSocket-Accept (RFC 6455 §4.2.2) */
@@ -1068,32 +1214,84 @@ static size_t ws_build_frame_header(unsigned char *header,
 	return hlen;
 }
 
+static size_t ws_build_data_frame_header(unsigned char *header,
+                                         unsigned char opcode,
+                                         int compressed,
+                                         size_t len) {
+	size_t hlen = ws_build_frame_header(header, opcode, 1, len);
+	if (compressed)
+		header[0] |= 0x40;
+	return hlen;
+}
+
 static int ws_send_data_frame(ws_t *ws,
                               unsigned char opcode,
                               char const *data,
                               size_t len) {
 	if (!ws || ws->state != WS_STATE_OPEN)
 		return -1;
-	if (len > SIZE_MAX - 14)
+	unsigned char const *wire_data = (unsigned char const *)data;
+	size_t wire_len = len;
+	int compressed = 0;
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+	unsigned char *compressed_data = NULL;
+	if (ws->pmd.negotiated) {
+		if (!ws->tx_deflater &&
+		    ws_deflate_compressor_create(&ws->tx_deflater) != WS_DEFLATE_OK) {
+			ws_fail_message(ws, 1011, "failed to allocate WebSocket deflater");
+			return -1;
+		}
+		ws_deflate_status status = ws_deflate_compress(
+		    ws->tx_deflater, (unsigned char const *)data, len,
+		    ws->pmd.client_no_context_takeover, &compressed_data, &wire_len);
+		if (status != WS_DEFLATE_OK) {
+			ws_deflate_compressor_destroy(ws->tx_deflater);
+			ws->tx_deflater = NULL;
+			ws_fail_message(ws, 1011, "failed to compress WebSocket message");
+			return -1;
+		}
+		wire_data = compressed_data;
+		compressed = 1;
+	}
+#endif
+	if (wire_len > SIZE_MAX - 14) {
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+		ws_deflate_free(compressed_data);
+#endif
 		return -1;
+	}
 
-	unsigned char *frame = (unsigned char *)malloc(14 + len);
-	if (!frame)
+	unsigned char *frame = (unsigned char *)malloc(14 + wire_len);
+	if (!frame) {
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+		ws_deflate_free(compressed_data);
+#endif
 		return -1;
-	size_t hlen = ws_build_frame_header(frame, opcode, 1, len);
+	}
+	size_t hlen = ws_build_data_frame_header(frame, opcode, compressed, wire_len);
 
 	unsigned char mask[4];
 	if (ws_random_bytes(mask, sizeof(mask)) != 0) {
 		free(frame);
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+		ws_deflate_free(compressed_data);
+#endif
 		return -1;
 	}
 	memcpy(frame + hlen, mask, sizeof(mask));
-	ws_apply_mask((unsigned char const *)data, len, mask,
-	              frame + hlen + sizeof(mask));
+	ws_apply_mask(wire_data, wire_len, mask, frame + hlen + sizeof(mask));
 
-	size_t frame_len = hlen + sizeof(mask) + len;
+	size_t frame_len = hlen + sizeof(mask) + wire_len;
 	int rc = sock_send_all(ws->fd, frame, frame_len);
 	free(frame);
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+	ws_deflate_free(compressed_data);
+	if (rc != (int)frame_len && compressed) {
+		ws_deflate_compressor_destroy(ws->tx_deflater);
+		ws->tx_deflater = NULL;
+		ws->state = WS_STATE_ERROR;
+	}
+#endif
 	return rc == (int)frame_len ? 0 : -1;
 }
 
@@ -1166,6 +1364,64 @@ static int ws_send_control(ws_t *ws,
 	           : -1;
 }
 
+static int ws_fail_message(ws_t *ws, uint16_t code, char const *message) {
+	unsigned char fail[2] = {(unsigned char)(code >> 8), (unsigned char)code};
+	ws_send_control(ws, 0x88, fail, 2);
+	ws->state = WS_STATE_ERROR;
+	if (ws->callbacks.on_error)
+		ws->callbacks.on_error(ws, message, ws->callbacks.userdata);
+	return -1;
+}
+
+static int ws_deliver_message(ws_t *ws,
+                              unsigned char const *payload,
+                              size_t payload_len,
+                              int binary,
+                              int compressed) {
+	unsigned char const *message = payload;
+	size_t message_len = payload_len;
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+	unsigned char *inflated = NULL;
+	if (compressed) {
+		if (!ws->rx_inflater &&
+		    ws_deflate_decompressor_create(&ws->rx_inflater) != WS_DEFLATE_OK)
+			return ws_fail_message(ws, 1011, "failed to allocate WebSocket inflater");
+		ws_deflate_status status = ws_deflate_decompress(
+		    ws->rx_inflater, payload, payload_len, WS_DECOMPRESSED_MAX,
+		    ws->pmd.server_no_context_takeover, &inflated, &message_len);
+		if (status != WS_DEFLATE_OK) {
+			ws_deflate_decompressor_destroy(ws->rx_inflater);
+			ws->rx_inflater = NULL;
+			if (status == WS_DEFLATE_OUTPUT_LIMIT || status == WS_DEFLATE_OVERFLOW)
+				return ws_fail_message(ws, 1009,
+				                       "decompressed message exceeds size limit");
+			if (status == WS_DEFLATE_OUT_OF_MEMORY)
+				return ws_fail_message(ws, 1011,
+				                       "failed to decompress WebSocket message");
+			return ws_fail_message(ws, 1002,
+			                       "malformed compressed WebSocket message");
+		}
+		message = inflated;
+	}
+#else
+	if (compressed)
+		return ws_fail_message(ws, 1002, "compressed message was not negotiated");
+#endif
+	if (!binary && !ws_utf8_valid(message, message_len)) {
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+		ws_deflate_free(inflated);
+#endif
+		return ws_fail_message(ws, 1007, "invalid UTF-8 in text message");
+	}
+	if (ws->callbacks.on_message)
+		ws->callbacks.on_message(ws, (char const *)message, message_len, binary,
+		                         ws->callbacks.userdata);
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+	ws_deflate_free(inflated);
+#endif
+	return 0;
+}
+
 /* Begin streaming a data frame whose payload is too large to fit in the
  * fixed recv_buf. `p` points at the (complete) frame header in recv_buf,
  * `header_len` bytes long; the bytes after it (up to recv_len) are the
@@ -1180,7 +1436,8 @@ static int ws_start_large_frame(ws_t *ws,
                                 uint64_t payload_len,
                                 int fin,
                                 unsigned char opcode,
-                                int masked) {
+                                int masked,
+                                int compressed) {
 	if (opcode >= 0x8) {
 		unsigned char fail[2] = {0x03, 0xea}; /* 1002 */
 		ws_send_control(ws, 0x88, fail, 2);
@@ -1227,6 +1484,7 @@ static int ws_start_large_frame(ws_t *ws,
 	ws->stream_active = 1;
 	ws->stream_fin = fin;
 	ws->stream_opcode = opcode;
+	ws->stream_compressed = compressed;
 	ws->stream_payload_len = payload_len;
 	ws->stream_masked = masked;
 	if (masked)
@@ -1238,6 +1496,7 @@ static int ws_start_large_frame(ws_t *ws,
 		if (!fin) {
 			ws->frag_active = 1;
 			ws->frag_binary = (opcode == 0x2);
+			ws->frag_compressed = compressed;
 		}
 	}
 	/* opcode 0x0 (continuation): append to the existing fragmented message
@@ -1253,6 +1512,9 @@ static int ws_start_large_frame(ws_t *ws,
 			q[i] ^= ws->stream_mask[i & 3];
 	}
 	if (avail > 0 && frag_append(ws, payload, avail) != 0) {
+		if (compressed || ws->frag_compressed)
+			return ws_fail_message(ws, 1011,
+			                       "out of memory buffering compressed message");
 		ws->state = WS_STATE_ERROR;
 		if (ws->callbacks.on_error)
 			ws->callbacks.on_error(ws, "out of memory reassembling large frame",
@@ -1274,19 +1536,11 @@ static int ws_finish_large_frame(ws_t *ws) {
 	if (opcode == 0x0) {
 		/* Continuation frame completing a fragmented message. */
 		if (ws->stream_fin) {
-			if (!ws->frag_binary && !ws_utf8_valid(ws->frag_buf, ws->frag_len)) {
-				unsigned char fail[2] = {0x03, 0xef}; /* 1007 */
-				ws_send_control(ws, 0x88, fail, 2);
-				ws->state = WS_STATE_ERROR;
-				if (ws->callbacks.on_error)
-					ws->callbacks.on_error(ws, "invalid UTF-8 in text message",
-					                       ws->callbacks.userdata);
+			if (ws_deliver_message(ws, ws->frag_buf, ws->frag_len, ws->frag_binary,
+			                       ws->frag_compressed) != 0)
 				return -1;
-			}
-			if (ws->callbacks.on_message)
-				ws->callbacks.on_message(ws, (char const *)ws->frag_buf, ws->frag_len,
-				                         ws->frag_binary, ws->callbacks.userdata);
 			ws->frag_active = 0;
+			ws->frag_compressed = 0;
 			ws->frag_len = 0;
 			return 1;
 		}
@@ -1296,19 +1550,11 @@ static int ws_finish_large_frame(ws_t *ws) {
 	/* Data frame (0x1 / 0x2). */
 	int binary = (opcode == 0x2);
 	if (ws->stream_fin) {
-		if (!binary && !ws_utf8_valid(ws->frag_buf, ws->frag_len)) {
-			unsigned char fail[2] = {0x03, 0xef}; /* 1007 */
-			ws_send_control(ws, 0x88, fail, 2);
-			ws->state = WS_STATE_ERROR;
-			if (ws->callbacks.on_error)
-				ws->callbacks.on_error(ws, "invalid UTF-8 in text message",
-				                       ws->callbacks.userdata);
+		if (ws_deliver_message(ws, ws->frag_buf, ws->frag_len, binary,
+		                       ws->stream_compressed) != 0)
 			return -1;
-		}
-		if (ws->callbacks.on_message)
-			ws->callbacks.on_message(ws, (char const *)ws->frag_buf, ws->frag_len,
-			                         binary, ws->callbacks.userdata);
 		ws->frag_active = 0;
+		ws->frag_compressed = 0;
 		ws->frag_len = 0;
 		return 1;
 	}
@@ -1654,8 +1900,15 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 
 				/* See if we have a complete 101 response now */
 				size_t header_len = 0;
+				struct ws_permessage_deflate agreed;
 				int up = parse_upgrade_response(ws->recv_buf, ws->recv_len, &header_len,
-				                                ws->key);
+				                                ws->key,
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+				                                1,
+#else
+				                                0,
+#endif
+				                                &agreed);
 				if (up < 0) {
 					ws->state = WS_STATE_ERROR;
 					if (ws->callbacks.on_error)
@@ -1664,6 +1917,7 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 					return WS_EVENT_ERROR;
 				}
 				if (up == 1) {
+					ws->pmd = agreed;
 					ws->state = WS_STATE_OPEN;
 					/* Address list no longer needed once connected. */
 					freeaddrinfo(ws->ai_list);
@@ -1742,6 +1996,11 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 					}
 					if (frag_append(ws, (unsigned char const *)ws->recv_buf, (size_t)n) !=
 					    0) {
+						if (ws->stream_compressed || ws->frag_compressed) {
+							ws_fail_message(ws, 1011,
+							                "out of memory buffering compressed message");
+							return WS_EVENT_ERROR;
+						}
 						ws->state = WS_STATE_ERROR;
 						if (ws->callbacks.on_error)
 							ws->callbacks.on_error(ws,
@@ -1829,15 +2088,18 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 			size_t consumed = 0;
 			while (ws->recv_len - consumed >= 2) {
 				unsigned char *p = (unsigned char *)ws->recv_buf + consumed;
-				if (p[0] & 0x70) {
-					ws->state = WS_STATE_ERROR;
-					if (ws->callbacks.on_error)
-						ws->callbacks.on_error(ws, "non-zero RSV bits",
-						                       ws->callbacks.userdata);
+				int compressed = (p[0] & 0x40) != 0;
+				if (p[0] & 0x30) {
+					ws_fail_message(ws, 1002, "non-zero RSV2 or RSV3 bit");
 					return WS_EVENT_ERROR;
 				}
 				int fin = (p[0] & 0x80) ? 1 : 0;
 				unsigned char opcode = p[0] & 0x0f;
+				if (compressed &&
+				    (!ws->pmd.negotiated || opcode == 0x0 || opcode >= 0x8)) {
+					ws_fail_message(ws, 1002, "invalid RSV1 bit");
+					return WS_EVENT_ERROR;
+				}
 				int masked = (p[1] & 0x80) ? 1 : 0;
 				uint64_t payload_len = p[1] & 0x7f;
 				size_t header_len = 2;
@@ -1877,7 +2139,7 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 					if (ws->recv_len - consumed < header_len)
 						break; /* header not complete yet */
 					if (ws_start_large_frame(ws, p, header_len, payload_len, fin, opcode,
-					                         masked) != 0)
+					                         masked, compressed) != 0)
 						return WS_EVENT_ERROR;
 					consumed = ws->recv_len; /* header + partial payload consumed */
 					break;
@@ -1978,6 +2240,11 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 						return WS_EVENT_ERROR;
 					}
 					if (frag_append(ws, payload, (size_t)payload_len) != 0) {
+						if (ws->frag_compressed) {
+							ws_fail_message(ws, 1011,
+							                "out of memory buffering compressed message");
+							return WS_EVENT_ERROR;
+						}
 						ws->state = WS_STATE_ERROR;
 						if (ws->callbacks.on_error)
 							ws->callbacks.on_error(
@@ -1986,22 +2253,12 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 						return WS_EVENT_ERROR;
 					}
 					if (fin) {
-						if (!ws->frag_binary &&
-						    !ws_utf8_valid(ws->frag_buf, ws->frag_len)) {
-							unsigned char fail[2] = {0x03, 0xef}; /* 1007 */
-							ws_send_control(ws, 0x88, fail, 2);
-							ws->state = WS_STATE_ERROR;
-							if (ws->callbacks.on_error)
-								ws->callbacks.on_error(ws, "invalid UTF-8 in text message",
-								                       ws->callbacks.userdata);
+						if (ws_deliver_message(ws, ws->frag_buf, ws->frag_len,
+						                       ws->frag_binary, ws->frag_compressed) != 0)
 							return WS_EVENT_ERROR;
-						}
-						if (ws->callbacks.on_message)
-							ws->callbacks.on_message(ws, (char const *)ws->frag_buf,
-							                         ws->frag_len, ws->frag_binary,
-							                         ws->callbacks.userdata);
 						delivered = 1;
 						ws->frag_active = 0;
+						ws->frag_compressed = 0;
 						ws->frag_len = 0;
 					}
 				} else if (opcode == 0x1 || opcode == 0x2) {
@@ -2018,8 +2275,14 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 						/* First fragment of a fragmented message -- start buffering. */
 						ws->frag_active = 1;
 						ws->frag_binary = (opcode == 0x2);
+						ws->frag_compressed = compressed;
 						ws->frag_len = 0;
 						if (frag_append(ws, payload, (size_t)payload_len) != 0) {
+							if (compressed) {
+								ws_fail_message(ws, 1011,
+								                "out of memory buffering compressed message");
+								return WS_EVENT_ERROR;
+							}
 							ws->state = WS_STATE_ERROR;
 							if (ws->callbacks.on_error)
 								ws->callbacks.on_error(
@@ -2027,20 +2290,11 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 								    ws->callbacks.userdata);
 							return WS_EVENT_ERROR;
 						}
-					} else if (ws->callbacks.on_message) {
+					} else {
 						int binary = (opcode == 0x2);
-						if (!binary && !ws_utf8_valid(payload, (size_t)payload_len)) {
-							unsigned char fail[2] = {0x03, 0xef}; /* 1007 */
-							ws_send_control(ws, 0x88, fail, 2);
-							ws->state = WS_STATE_ERROR;
-							if (ws->callbacks.on_error)
-								ws->callbacks.on_error(ws, "invalid UTF-8 in text message",
-								                       ws->callbacks.userdata);
+						if (ws_deliver_message(ws, payload, (size_t)payload_len, binary,
+						                       compressed) != 0)
 							return WS_EVENT_ERROR;
-						}
-						ws->callbacks.on_message(ws, (char const *)payload,
-						                         (size_t)payload_len, binary,
-						                         ws->callbacks.userdata);
 						delivered = 1;
 					}
 				}
@@ -2141,6 +2395,10 @@ void ws_destroy(ws_t *ws) {
 	free(ws->frag_buf);
 	free(ws->proxy_host);
 	free(ws->proxy_auth);
+#ifdef WS_ENABLE_PERMESSAGE_DEFLATE
+	ws_deflate_compressor_destroy(ws->tx_deflater);
+	ws_deflate_decompressor_destroy(ws->rx_inflater);
+#endif
 	if (ws->ai_list)
 		freeaddrinfo(ws->ai_list);
 	free(ws);
