@@ -3,7 +3,7 @@ name: Build and Test
 on:
   workflow_dispatch:
   #push:
-  pull_request:
+  #pull_request:
 
 jobs:
   test:
