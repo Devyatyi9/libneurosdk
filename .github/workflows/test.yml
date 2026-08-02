@@ -69,6 +69,8 @@ jobs:
       with:
         path: ${{ github.workspace }}/.vcpkg-bincache
         key: vcpkg-bin-v1-${{ runner.os }}-${{ matrix.arch }}-${{ steps.vcpkg.outputs.revision }}-libuv-zlib-static
+        restore-keys: |
+          vcpkg-bin-v1-${{ runner.os }}-${{ matrix.arch }}-
 
     - name: Restore uWebSockets source cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
