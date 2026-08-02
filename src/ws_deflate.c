@@ -156,6 +156,7 @@ ws_deflate_status ws_deflate_compress(ws_deflate_compressor *context,
 
 	do {
 		size_t remaining = input_size - consumed;
+		size_t previous_used = used;
 		mz_uint input_chunk =
 		    (mz_uint)(remaining > WS_DEFLATE_CHUNK ? WS_DEFLATE_CHUNK : remaining);
 		status = ws_deflate_grow(&buffer, &capacity, used, SIZE_MAX);
@@ -174,7 +175,14 @@ ws_deflate_status ws_deflate_compress(ws_deflate_compressor *context,
 		used = (size_t)(context->stream->next_out - buffer);
 		if (result != MZ_OK)
 			break;
-	} while (consumed < input_size || context->stream->avail_out == 0);
+		if (consumed == input_size && used >= sizeof(tail) &&
+		    memcmp(buffer + used - sizeof(tail), tail, sizeof(tail)) == 0)
+			break;
+		if (consumed == input_size && used == previous_used) {
+			status = WS_DEFLATE_CODEC_ERROR;
+			goto fail;
+		}
+	} while (true);
 
 	if (result != MZ_OK || consumed != input_size || used < sizeof(tail) ||
 	    memcmp(buffer + used - sizeof(tail), tail, sizeof(tail)) != 0) {

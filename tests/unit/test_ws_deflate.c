@@ -48,6 +48,7 @@ int main(void) {
 	                                 0x80, 0x42, 0x00, 0xfe};
 	static uint8_t const malformed[] = {0xff, 0xff, 0xff};
 	uint8_t incompressible[1024];
+	uint8_t long_sequence[65536];
 	ws_deflate_compressor *compressor = NULL;
 	ws_deflate_decompressor *decompressor = NULL;
 	uint8_t *compressed = NULL;
@@ -57,6 +58,7 @@ int main(void) {
 	size_t second_compressed_size = 0;
 	size_t output_size = 0;
 	size_t i;
+	uint32_t random_state = 0x12345678U;
 
 	assert(ws_deflate_compressor_create(&compressor) == WS_DEFLATE_OK);
 	assert(ws_deflate_decompressor_create(&decompressor) == WS_DEFLATE_OK);
@@ -93,6 +95,22 @@ int main(void) {
 		incompressible[i] = (uint8_t)((i * 73U + i / 7U) & 0xffU);
 	assert_roundtrip(compressor, decompressor, incompressible,
 	                 sizeof(incompressible), false);
+
+	assert(ws_deflate_compressor_reset(compressor) == WS_DEFLATE_OK);
+	assert(ws_deflate_decompressor_reset(decompressor) == WS_DEFLATE_OK);
+	for (i = 0; i < 100; ++i) {
+		size_t j;
+		for (j = 0; j < sizeof(long_sequence); ++j) {
+			if ((j & 1U) == 0) {
+				random_state ^= random_state << 13;
+				random_state ^= random_state >> 17;
+				random_state ^= random_state << 5;
+			}
+			long_sequence[j] = (uint8_t)random_state;
+		}
+		assert_roundtrip(compressor, decompressor, long_sequence,
+		                 sizeof(long_sequence), false);
+	}
 
 	assert(ws_deflate_compressor_reset(compressor) == WS_DEFLATE_OK);
 	assert(ws_deflate_decompressor_reset(decompressor) == WS_DEFLATE_OK);
