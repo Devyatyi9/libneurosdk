@@ -255,5 +255,34 @@ int main(void) {
 	hlen = parse_frame_header(hdr, 1, &fin, &opcode, &masked, &plen);
 	test("incomplete header returns -1", hlen == -1);
 
+	{
+		struct ws_utf8_state state;
+		unsigned char const valid_a[] = {0xCE, 0xBA, 0xF4};
+		unsigned char const valid_b[] = {0x8F, 0xBF, 0xBF};
+		unsigned char const out_of_range_a[] = {0xF4};
+		unsigned char const out_of_range_b[] = {0x90};
+		unsigned char const surrogate[] = {0xED, 0xA0};
+		unsigned char const overlong[] = {0xE0, 0x9F};
+
+		ws_utf8_reset(&state);
+		test(
+		    "UTF-8 accepts an incomplete code point",
+		    ws_utf8_feed(&state, valid_a, sizeof(valid_a)) && state.remaining == 3);
+		test(
+		    "UTF-8 completes a code point across chunks",
+		    ws_utf8_feed(&state, valid_b, sizeof(valid_b)) && state.remaining == 0);
+
+		ws_utf8_reset(&state);
+		test("UTF-8 rejects a code point above U+10FFFF incrementally",
+		     ws_utf8_feed(&state, out_of_range_a, sizeof(out_of_range_a)) &&
+		         !ws_utf8_feed(&state, out_of_range_b, sizeof(out_of_range_b)));
+		ws_utf8_reset(&state);
+		test("UTF-8 rejects surrogate code points",
+		     !ws_utf8_feed(&state, surrogate, sizeof(surrogate)));
+		ws_utf8_reset(&state);
+		test("UTF-8 rejects overlong encodings",
+		     !ws_utf8_feed(&state, overlong, sizeof(overlong)));
+	}
+
 	return failed ? 1 : 0;
 }

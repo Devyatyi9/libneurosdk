@@ -341,6 +341,18 @@ def test_18_ping_interleave():
     assert rc == 0, f"ping_interleave test failed (exit {rc})"
 
 
+@pytest.mark.parametrize("mode,port", [("fragment", 19122), ("chop", 19123)])
+def test_18_utf8_fail_fast(mode, port):
+    """#18b: Invalid UTF-8 is rejected at its fragment or TCP chop."""
+    srv = _start_server("utf8_fail_fast_server.py", port, mode)
+    client_bin = _find_binary("test_negative")
+    assert client_bin, "test_negative binary not built"
+    rc = _run_client(client_bin, f"ws://127.0.0.1:{port}/",
+                     "error-after-open", "invalid UTF-8 in text message")
+    _wait_server(srv, "utf8_fail_fast_server.py")
+    assert rc == 0, f"UTF-8 fail-fast {mode} test failed (exit {rc})"
+
+
 def test_19_dns_failure():
     """#19: DNS resolution failure — connect to nonexistent host."""
     client_bin = _find_binary("test_negative")

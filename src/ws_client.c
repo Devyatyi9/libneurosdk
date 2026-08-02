@@ -86,6 +86,12 @@ struct ws_permessage_deflate {
 	unsigned char server_max_window_bits;
 };
 
+struct ws_utf8_state {
+	unsigned char remaining;
+	unsigned char lower;
+	unsigned char upper;
+};
+
 struct ws_t {
 	ws_state_e state;
 	ws_callbacks_t callbacks;
@@ -124,11 +130,11 @@ struct ws_t {
 	unsigned char *frag_buf;
 	size_t frag_len;
 	size_t frag_cap;
+	struct ws_utf8_state utf8;
 
-	/* Large single-frame streaming (OPEN state). When a data frame's
-	 * payload is too big to fit in the fixed recv_buf, the bytes are
-	 * accumulated here (into frag_buf) across ws_poll() calls instead
-	 * of erroring out with "message exceeds receive buffer size". */
+	/* Data-frame streaming (OPEN state). Incomplete payloads are accumulated
+	 * here across ws_poll() calls; this also handles frames larger than the
+	 * fixed recv_buf and permits incremental UTF-8 validation. */
 	int stream_active; /* currently streaming a large frame */
 	int stream_fin;    /* FIN bit of the streamed frame */
 	unsigned char stream_opcode;
@@ -1331,45 +1337,52 @@ int ws_send_binary(ws_t *ws, char const *data, size_t len) {
 	return ws_send_data_frame(ws, 0x2, data, len);
 }
 
-static int ws_utf8_valid(unsigned char const *s, size_t len) {
-	size_t i = 0;
-	while (i < len) {
-		unsigned int cp;
-		int n;
-		if (s[i] <= 0x7F) {
-			i++;
-			continue;
-		} else if ((s[i] & 0xE0) == 0xC0) {
-			cp = s[i] & 0x1F;
-			n = 2;
-		} else if ((s[i] & 0xF0) == 0xE0) {
-			cp = s[i] & 0x0F;
-			n = 3;
-		} else if ((s[i] & 0xF8) == 0xF0) {
-			cp = s[i] & 0x07;
-			n = 4;
-		} else
-			return 0;
-		if (i + (size_t)n > len)
-			return 0;
-		for (int j = 1; j < n; j++) {
-			if ((s[i + j] & 0xC0) != 0x80)
+static void ws_utf8_reset(struct ws_utf8_state *state) {
+	state->remaining = 0;
+	state->lower = 0x80;
+	state->upper = 0xBF;
+}
+
+static int ws_utf8_feed(struct ws_utf8_state *state,
+                        unsigned char const *s,
+                        size_t len) {
+	for (size_t i = 0; i < len; i++) {
+		unsigned char c = s[i];
+		if (state->remaining != 0) {
+			if (c < state->lower || c > state->upper)
 				return 0;
-			cp = (cp << 6) | (s[i + j] & 0x3F);
+			state->remaining--;
+			state->lower = 0x80;
+			state->upper = 0xBF;
+			continue;
 		}
-		if (n == 2 && cp < 0x80)
+		if (c <= 0x7F)
+			continue;
+		if (c >= 0xC2 && c <= 0xDF) {
+			state->remaining = 1;
+		} else if (c >= 0xE0 && c <= 0xEF) {
+			state->remaining = 2;
+			if (c == 0xE0)
+				state->lower = 0xA0;
+			else if (c == 0xED)
+				state->upper = 0x9F;
+		} else if (c >= 0xF0 && c <= 0xF4) {
+			state->remaining = 3;
+			if (c == 0xF0)
+				state->lower = 0x90;
+			else if (c == 0xF4)
+				state->upper = 0x8F;
+		} else {
 			return 0;
-		if (n == 3 && cp < 0x800)
-			return 0;
-		if (n == 4 && cp < 0x10000)
-			return 0;
-		if (cp > 0x10FFFF)
-			return 0;
-		if (cp >= 0xD800 && cp <= 0xDFFF)
-			return 0;
-		i += (size_t)n;
+		}
 	}
 	return 1;
+}
+
+static int ws_utf8_valid(unsigned char const *s, size_t len) {
+	struct ws_utf8_state state;
+	ws_utf8_reset(&state);
+	return ws_utf8_feed(&state, s, len) && state.remaining == 0;
 }
 
 /* Helper to build a masked Close or Pong response and send it.
@@ -1399,6 +1412,16 @@ static int ws_fail_message(ws_t *ws, uint16_t code, char const *message) {
 	if (ws->callbacks.on_error)
 		ws->callbacks.on_error(ws, message, ws->callbacks.userdata);
 	return -1;
+}
+
+static int ws_validate_text_chunk(ws_t *ws,
+                                  unsigned char const *payload,
+                                  size_t payload_len,
+                                  int final) {
+	if (!ws_utf8_feed(&ws->utf8, payload, payload_len) ||
+	    (final && ws->utf8.remaining != 0))
+		return ws_fail_message(ws, 1007, "invalid UTF-8 in text message");
+	return 0;
 }
 
 static int ws_deliver_message(ws_t *ws,
@@ -1450,8 +1473,8 @@ static int ws_deliver_message(ws_t *ws,
 	return 0;
 }
 
-/* Begin streaming a data frame whose payload is too large to fit in the
- * fixed recv_buf. `p` points at the (complete) frame header in recv_buf,
+/* Begin streaming an incomplete data frame. `p` points at the complete
+ * frame header in recv_buf,
  * `header_len` bytes long; the bytes after it (up to recv_len) are the
  * partial payload. That partial payload is unmasked (if needed) and copied
  * into the dynamic frag buffer; the rest is appended by the OPEN-state
@@ -1521,6 +1544,8 @@ static int ws_start_large_frame(ws_t *ws,
 	if (opcode == 0x1 || opcode == 0x2) {
 		/* Data frame: start a fresh message in the frag buffer. */
 		ws->frag_len = 0;
+		if (opcode == 0x1 && !compressed)
+			ws_utf8_reset(&ws->utf8);
 		if (!fin) {
 			ws->frag_active = 1;
 			ws->frag_binary = (opcode == 0x2);
@@ -1539,6 +1564,11 @@ static int ws_start_large_frame(ws_t *ws,
 		for (size_t i = 0; i < avail; i++)
 			q[i] ^= ws->stream_mask[i & 3];
 	}
+	int text = (opcode == 0x1 && !compressed) ||
+	           (opcode == 0x0 && !ws->frag_binary && !ws->frag_compressed);
+	if (text && ws_validate_text_chunk(ws, payload, avail,
+	                                   avail == payload_len && fin) != 0)
+		return -1;
 	if (avail > 0 && frag_append(ws, payload, avail) != 0) {
 		if (compressed || ws->frag_compressed)
 			return ws_fail_message(ws, 1011,
@@ -2022,6 +2052,14 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 							ws->recv_buf[i] ^=
 							    ws->stream_mask[(ws->stream_payload_recvd + (unsigned)i) & 3];
 					}
+					int text = (ws->stream_opcode == 0x1 && !ws->stream_compressed) ||
+					           (ws->stream_opcode == 0x0 && !ws->frag_binary &&
+					            !ws->frag_compressed);
+					if (text &&
+					    ws_validate_text_chunk(
+					        ws, (unsigned char const *)ws->recv_buf, (size_t)n,
+					        (uint64_t)n == ws->stream_remaining && ws->stream_fin) != 0)
+						return WS_EVENT_ERROR;
 					if (frag_append(ws, (unsigned char const *)ws->recv_buf, (size_t)n) !=
 					    0) {
 						if (ws->stream_compressed || ws->frag_compressed) {
@@ -2158,12 +2196,11 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 				if (masked)
 					header_len += 4;
 
-				/* A frame that can never fit in the fixed recv_buf: stream its
-				 * payload into the dynamic frag buffer instead of erroring out
-				 * when the buffer fills up. Only data frames (0x0/0x1/0x2) can
-				 * be this large; anything else is a protocol violation caught
-				 * by ws_start_large_frame(). */
-				if ((uint64_t)header_len + payload_len > WS_RECV_BUF_SIZE) {
+				/* Stream incomplete data payloads so text can be validated as TCP
+				 * chunks arrive. This also handles frames larger than recv_buf. */
+				if ((uint64_t)header_len + payload_len > WS_RECV_BUF_SIZE ||
+				    ((opcode <= 0x2) &&
+				     ws->recv_len - consumed < header_len + payload_len)) {
 					if (ws->recv_len - consumed < header_len)
 						break; /* header not complete yet */
 					if (ws_start_large_frame(ws, p, header_len, payload_len, fin, opcode,
@@ -2267,6 +2304,10 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 							                       ws->callbacks.userdata);
 						return WS_EVENT_ERROR;
 					}
+					if (!ws->frag_binary && !ws->frag_compressed &&
+					    ws_validate_text_chunk(ws, payload, (size_t)payload_len, fin) !=
+					        0)
+						return WS_EVENT_ERROR;
 					if (frag_append(ws, payload, (size_t)payload_len) != 0) {
 						if (ws->frag_compressed) {
 							ws_fail_message(ws, 1011,
@@ -2298,6 +2339,12 @@ ws_event_e ws_poll(ws_t *ws, int timeout_ms) {
 							ws->callbacks.on_error(ws, "expected continuation frame",
 							                       ws->callbacks.userdata);
 						return WS_EVENT_ERROR;
+					}
+					if (opcode == 0x1 && !compressed) {
+						ws_utf8_reset(&ws->utf8);
+						if (ws_validate_text_chunk(ws, payload, (size_t)payload_len, fin) !=
+						    0)
+							return WS_EVENT_ERROR;
 					}
 					if (!fin) {
 						/* First fragment of a fragmented message -- start buffering. */
