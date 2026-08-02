@@ -8,6 +8,7 @@ option(NEURO_BUILD_STATIC "Build the library statically" ON)
 option(NEURO_BUILD_TESTS "Build test executables" OFF)
 option(NEURO_BUILD_EXAMPLES "Build example executables" OFF)
 option(NEURO_SANITIZE "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+option(NEURO_WARNINGS_AS_ERRORS "Treat project compiler warnings as errors" OFF)
 option(ENABLE_PERMESSAGE_DEFLATE "Build the internal RFC 7692 codec" ON)
 
 if(NEURO_SANITIZE)
@@ -27,8 +28,14 @@ endif()
 
 if(MSVC)
 	add_compile_options(/W4 /permissive- /std:c11)
+	if(NEURO_WARNINGS_AS_ERRORS)
+		add_compile_options(/WX)
+	endif()
 else()
 	add_compile_options(-Wall -Wextra -Wpedantic -Wimplicit-fallthrough -std=gnu11)
+	if(NEURO_WARNINGS_AS_ERRORS)
+		add_compile_options(-Werror)
+	endif()
 endif()
 
 execute_process(

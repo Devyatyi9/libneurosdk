@@ -15,9 +15,13 @@ jobs:
           - os: ubuntu-latest
             arch: x64
             asan: false
+            cc: gcc
+            cxx: g++
           - os: ubuntu-latest
             arch: x64
             asan: true
+            cc: clang
+            cxx: clang++
           - os: macos-latest
             arch: arm64
             asan: false
@@ -83,10 +87,10 @@ jobs:
 
     - name: Configure CMake
       env:
-        CC: ${{ matrix.os == 'ubuntu-latest' && 'clang' || '' }}
-        CXX: ${{ matrix.os == 'ubuntu-latest' && 'clang++' || '' }}
+        CC: ${{ matrix.cc || '' }}
+        CXX: ${{ matrix.cxx || '' }}
       run: |
-        cmake -B build -DNEURO_BUILD_TESTS=ON ${{ matrix.asan && '-DNEURO_SANITIZE=ON' || '' }} ${{ matrix.os == 'windows-latest' && (matrix.arch == 'x86' && '-A Win32' || format('-A {0}', matrix.arch)) || '' }}
+        cmake -B build -DNEURO_BUILD_TESTS=ON -DNEURO_WARNINGS_AS_ERRORS=ON ${{ matrix.asan && '-DNEURO_SANITIZE=ON' || '' }} ${{ matrix.os == 'windows-latest' && (matrix.arch == 'x86' && '-A Win32' || format('-A {0}', matrix.arch)) || '' }}
 
     - name: Build
       run: cmake --build build --config Release --target ws_test_suite
