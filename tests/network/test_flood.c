@@ -25,6 +25,8 @@ static long s_msg_count = 0;
 static long s_expected = 1000;
 static int s_failed = 0;
 static int s_closed = 0;
+static int s_errors = 0;
+static uint16_t s_close_code = 0;
 
 static void on_open(ws_t *ws, void *userdata) {
 	(void)ws;
@@ -61,6 +63,7 @@ static void on_close(ws_t *ws,
 	(void)reason;
 	(void)reason_len;
 	(void)userdata;
+	s_close_code = code;
 	if (code != 1000)
 		s_failed = 1;
 	s_closed = 1;
@@ -71,6 +74,7 @@ static void on_error(ws_t *ws, char const *msg, void *userdata) {
 	(void)ws;
 	(void)userdata;
 	fprintf(stderr, "FAIL: error: %s\n", msg);
+	s_errors++;
 	s_failed = 1;
 	s_done = 1;
 }
@@ -89,16 +93,21 @@ int main(int argc, char *argv[]) {
 	while (!s_done && now_ms() < deadline) {
 		ws_poll(ws, 100);
 	}
+	int timed_out = !s_done && now_ms() >= deadline;
+	int state = ws_state(ws);
+	int result = !s_connected || s_failed || !s_closed || s_close_code != 1000 ||
+	             s_msg_count != s_expected || timed_out ||
+	             state != WS_STATE_CLOSED;
+	if (result) {
+		fprintf(stderr,
+		        "FAIL: connected=%d messages=%ld expected=%ld closed=%d "
+		        "close_code=%u errors=%d failed=%d timeout=%d state=%d\n",
+		        s_connected, s_msg_count, s_expected, s_closed, s_close_code,
+		        s_errors, s_failed, timed_out, state);
+	}
 	ws_destroy(ws);
-	if (!s_connected) {
-		fprintf(stderr, "FAIL: never connected\n");
+	if (result)
 		return 1;
-	}
-	if (s_failed || !s_closed || s_msg_count != s_expected) {
-		fprintf(stderr, "FAIL: got %ld msgs, expected %ld, closed=%d, timeout=%d\n",
-		        s_msg_count, s_expected, s_closed, now_ms() >= deadline);
-		return 1;
-	}
 	printf("OK: %ld messages received\n", s_msg_count);
 	return 0;
 }

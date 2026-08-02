@@ -12,7 +12,9 @@
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
-static uint64_t now_ms(void) { return (uint64_t)GetTickCount64(); }
+static uint64_t now_ms(void) {
+	return (uint64_t)GetTickCount64();
+}
 #else
 #include <time.h>
 static uint64_t now_ms(void) {
@@ -23,12 +25,16 @@ static uint64_t now_ms(void) {
 #endif
 
 static char const messages[][128] = {
-    "shared context dictionary shared context dictionary AAAAAAAAAAAAAAAAAAAAAAAA",
-    "shared context dictionary shared context dictionary BBBBBBBBBBBBBBBBBBBBBBBB"};
+    "shared context dictionary shared context dictionary "
+    "AAAAAAAAAAAAAAAAAAAAAAAA",
+    "shared context dictionary shared context dictionary "
+    "BBBBBBBBBBBBBBBBBBBBBBBB"};
 static int opened;
 static int received;
 static int failed;
 static int closed;
+static int errors;
+static uint16_t close_code;
 
 static void on_open(ws_t *ws, void *userdata) {
 	(void)userdata;
@@ -38,10 +44,10 @@ static void on_open(ws_t *ws, void *userdata) {
 }
 
 static void on_message(ws_t *ws,
-	                   char const *data,
-	                   size_t len,
-	                   int binary,
-	                   void *userdata) {
+                       char const *data,
+                       size_t len,
+                       int binary,
+                       void *userdata) {
 	(void)userdata;
 	if (binary || received >= 2 || len != strlen(messages[received]) ||
 	    memcmp(data, messages[received], len) != 0) {
@@ -58,23 +64,25 @@ static void on_message(ws_t *ws,
 }
 
 static void on_close(ws_t *ws,
-	                 uint16_t code,
-	                 char const *reason,
-	                 size_t reason_len,
-	                 void *userdata) {
+                     uint16_t code,
+                     char const *reason,
+                     size_t reason_len,
+                     void *userdata) {
 	(void)ws;
 	(void)reason;
 	(void)reason_len;
 	(void)userdata;
 	closed = 1;
+	close_code = code;
 	if (code != 1000)
 		failed = 1;
 }
 
 static void on_error(ws_t *ws, char const *message, void *userdata) {
 	(void)ws;
-	(void)message;
 	(void)userdata;
+	fprintf(stderr, "FAIL: error: %s\n", message);
+	errors++;
 	failed = 1;
 }
 
@@ -88,7 +96,17 @@ int main(int argc, char **argv) {
 	uint64_t deadline = now_ms() + 10000;
 	while (!closed && !failed && now_ms() < deadline)
 		ws_poll(ws, 100);
-	int result = !opened || received != 2 || !closed || failed;
+	int timed_out = !closed && !failed && now_ms() >= deadline;
+	int state = ws_state(ws);
+	int result = !opened || received != 2 || !closed || close_code != 1000 ||
+	             failed || timed_out || state != WS_STATE_CLOSED;
+	if (result) {
+		fprintf(stderr,
+		        "FAIL: opened=%d received=%d expected=2 closed=%d close_code=%u "
+		        "errors=%d failed=%d timeout=%d state=%d\n",
+		        opened, received, closed, close_code, errors, failed, timed_out,
+		        state);
+	}
 	ws_destroy(ws);
 	return result;
 }

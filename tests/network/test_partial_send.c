@@ -19,6 +19,8 @@ static int s_failed =
     0; /* only set on on_error — real protocol/network failure */
 static int s_done = 0;
 static int s_closed = 0;
+static int s_errors = 0;
+static uint16_t s_close_code = 0;
 
 static void on_open(ws_t *ws, void *userdata) {
 	(void)userdata;
@@ -69,6 +71,7 @@ static void on_close(ws_t *ws,
 	(void)reason;
 	(void)reason_len;
 	(void)userdata;
+	s_close_code = code;
 	if (code != 1000)
 		s_failed = 1;
 	s_closed = 1;
@@ -79,6 +82,7 @@ static void on_error(ws_t *ws, char const *msg, void *userdata) {
 	(void)ws;
 	(void)userdata;
 	fprintf(stderr, "FAIL: error: %s\n", msg);
+	s_errors++;
 	s_failed = 1;
 	s_done = 1;
 }
@@ -96,25 +100,18 @@ int main(int argc, char *argv[]) {
 		ws_poll(ws, 100);
 		budget--;
 	}
-	ws_destroy(ws);
-	if (!s_connected) {
-		fprintf(stderr, "FAIL: never connected\n");
-		return 1;
-	}
-	if (s_failed)
-		return 1;
-	if (!s_got_reply) {
+	int timed_out = budget <= 0 && !s_done;
+	int state = ws_state(ws);
+	int result = !s_connected || !s_got_reply || !s_closed ||
+	             s_close_code != 1000 || s_failed || timed_out ||
+	             state != WS_STATE_CLOSED;
+	if (result) {
 		fprintf(stderr,
-		        "FAIL: server reply never arrived (stream likely desynced)\n");
-		return 1;
+		        "FAIL: connected=%d reply=%d closed=%d close_code=%u errors=%d "
+		        "failed=%d timeout=%d state=%d\n",
+		        s_connected, s_got_reply, s_closed, s_close_code, s_errors,
+		        s_failed, timed_out, state);
 	}
-	if (!s_closed) {
-		fprintf(stderr, "FAIL: clean close did not complete\n");
-		return 1;
-	}
-	if (budget <= 0 && !s_done) {
-		fprintf(stderr, "FAIL: timed out waiting for server response\n");
-		return 1;
-	}
-	return 0;
+	ws_destroy(ws);
+	return result;
 }
