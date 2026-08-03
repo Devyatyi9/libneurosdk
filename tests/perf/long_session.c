@@ -17,6 +17,11 @@
 
 static int connected = 0;
 static int got_error = 0;
+static int closed = 0;
+static int invalid_message = 0;
+static int send_failed = 0;
+static int echo_missing = 0;
+static uint16_t close_code = 0;
 static unsigned long sent = 0;
 static unsigned long received = 0;
 
@@ -34,9 +39,11 @@ static void on_message(ws_t *ws,
                        void *userdata) {
 	(void)ws;
 	(void)userdata;
-	(void)data;
-	(void)len;
-	(void)binary;
+	if (binary || len != 4 || memcmp(data, "ping", 4) != 0) {
+		fprintf(stderr, "[error] invalid echo: binary=%d len=%zu\n", binary, len);
+		invalid_message = 1;
+		return;
+	}
 	received++;
 }
 
@@ -47,6 +54,8 @@ static void on_close(ws_t *ws,
                      void *userdata) {
 	(void)ws;
 	(void)userdata;
+	closed = 1;
+	close_code = code;
 	printf("[close] code=%u reason=%.*s (sent=%lu recv=%lu)\n", code,
 	       (int)reason_len, reason, sent, received);
 }
@@ -61,7 +70,12 @@ static void on_error(ws_t *ws, char const *msg, void *userdata) {
 int main(int argc, char *argv[]) {
 	char const *url = argc > 1 ? argv[1] : "ws://localhost:9001/";
 	int interval_ms = argc > 2 ? atoi(argv[2]) * 1000 : 60000;
-	int duration_h = argc > 3 ? atoi(argv[3]) : 3;
+	double duration_h = argc > 3 ? strtod(argv[3], NULL) : 3.0;
+	time_t duration_s = (time_t)(duration_h * 3600.0);
+	if (interval_ms <= 0 || duration_s <= 0) {
+		fprintf(stderr, "interval and duration must be positive\n");
+		return 2;
+	}
 
 	ws_callbacks_t callbacks = {
 	    .on_open = on_open,
@@ -76,23 +90,27 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	while (!connected && !got_error)
+	int connect_budget = 300;
+	while (!connected && !got_error && connect_budget-- > 0)
 		ws_poll(ws, 100);
-	if (got_error) {
+	if (!connected || got_error) {
+		fprintf(stderr, "[error] connection did not open: error=%d state=%d\n",
+		        got_error, ws_state(ws));
 		ws_destroy(ws);
 		return 1;
 	}
 
-	time_t end = time(NULL) + (time_t)duration_h * 3600;
+	time_t end = time(NULL) + duration_s;
 	time_t last_progress = 0;
-	printf("[info] Connected. Sending every %dms for %dh\n", interval_ms,
+	printf("[info] Connected. Sending every %dms for %.3gh\n", interval_ms,
 	       duration_h);
 	printf("[info] Progress: ");
 
-	while (time(NULL) < end && !got_error) {
+	do {
 		char const *msg = "ping";
 		if (ws_send(ws, msg, strlen(msg)) != 0) {
 			printf("[error] ws_send failed\n");
+			send_failed = 1;
 			break;
 		}
 		sent++;
@@ -106,8 +124,11 @@ int main(int argc, char *argv[]) {
 
 		if (got_error)
 			break;
-		if (received < sent)
-			printf("[warn] echo not received for message %lu\n", sent);
+		if (received < sent) {
+			fprintf(stderr, "[error] echo not received for message %lu\n", sent);
+			echo_missing = 1;
+			break;
+		}
 
 		/* Wait remainder of interval */
 		int remaining = interval_ms - waited;
@@ -126,14 +147,27 @@ int main(int argc, char *argv[]) {
 			fflush(stdout);
 			last_progress = now;
 		}
-	}
+	} while (time(NULL) < end && !got_error && !invalid_message);
 	printf("\r[info] Done.                          \n");
 
 	printf("[info] Closing (sent=%lu recv=%lu errors=%d)\n", sent, received,
 	       got_error);
-	ws_close(ws);
-	for (int i = 0; i < 10 && ws_state(ws) == WS_STATE_CLOSING; i++)
+	if (ws_state(ws) == WS_STATE_OPEN)
+		ws_close(ws);
+	for (int i = 0; i < 50 && ws_state(ws) == WS_STATE_CLOSING; i++)
 		ws_poll(ws, 100);
+	int state = ws_state(ws);
+	int result = got_error || invalid_message || send_failed || echo_missing ||
+	             received != sent || !closed || close_code != 1000 ||
+	             state != WS_STATE_CLOSED;
+	if (result) {
+		fprintf(stderr,
+		        "[fail] connected=%d sent=%lu received=%lu invalid=%d "
+		        "send_failed=%d echo_missing=%d errors=%d closed=%d "
+		        "close_code=%u state=%d\n",
+		        connected, sent, received, invalid_message, send_failed,
+		        echo_missing, got_error, closed, close_code, state);
+	}
 	ws_destroy(ws);
-	return got_error ? 1 : 0;
+	return result;
 }

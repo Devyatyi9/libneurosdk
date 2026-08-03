@@ -6,7 +6,7 @@ Each iteration is a full alloc/dealloc cycle. Catches frag_buf,
 socket handle, and outstanding allocation leaks under ASan.
 
 Usage:
-    python long_run.py [url] [duration_hours] [timeout_sec]
+    python long_run.py [url] [duration_hours] [timeout_sec] [binary]
 
 Default: ws://127.0.0.1:9001/  3h  timeout 30s/iter
 """
@@ -21,7 +21,7 @@ def main():
     timeout = int(sys.argv[3]) if len(sys.argv) > 3 else 60
     max_fails = 3                              # consecutive HUNG/FAIL before abort
     end = time.time() + hours * 3600
-    exe = find_echo_test()
+    exe = sys.argv[4] if len(sys.argv) > 4 else find_echo_test()
 
     print(f"Multi-connection long-run: {exe} -> {url}")
     print(f"Duration: {hours}h, timeout: {timeout}s/iter")

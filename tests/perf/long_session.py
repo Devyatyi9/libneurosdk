@@ -5,7 +5,7 @@ Runs long_session binary (compiled from long_session.c) which keeps
 one WS connection open for hours, periodically sending messages.
 
 Usage:
-    python long_session.py [url] [interval_sec] [duration_hours]
+    python long_session.py [url] [interval_sec] [duration_hours] [binary]
 
 Default: ws://127.0.0.1:9001/  60s  3h
 """
@@ -21,10 +21,10 @@ def main():
     url = sys.argv[1] if len(sys.argv) > 1 else "ws://127.0.0.1:9001/"
     interval = sys.argv[2] if len(sys.argv) > 2 else "60"
     hours = sys.argv[3] if len(sys.argv) > 3 else "3"
-    bin_path = find_bin()
+    bin_path = sys.argv[4] if len(sys.argv) > 4 else find_bin()
 
     # Timeout = hours + 5min safety margin
-    timeout = int(hours) * 3600 + 300
+    timeout = float(hours) * 3600 + 300
 
     print(f"Single-session long-run: {bin_path} -> {url}")
     print(f"Interval: {interval}s, duration: {hours}h, timeout: {timeout}s")
