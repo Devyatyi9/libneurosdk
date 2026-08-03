@@ -72,9 +72,9 @@ def _wait_port(port, timeout=10):
 def _run_client(bin_path, url, *extra_args):
     try:
         return subprocess.run([bin_path, url] + list(extra_args),
-                              env=build_env(bin_path), timeout=120).returncode
+                              env=build_env(bin_path), timeout=60).returncode
     except subprocess.TimeoutExpired:
-        pytest.fail(f"client timed out after 120s: {os.path.basename(bin_path)}")
+        pytest.fail(f"client timed out after 60s: {os.path.basename(bin_path)}")
 
 
 def _wait_server(proc, name, timeout=10):
@@ -445,9 +445,9 @@ def test_23_proxy_env_no_proxy():
         try:
             rc = subprocess.run(
                 [client_bin, f"ws://127.0.0.1:{up_port}/"], env=env,
-                timeout=120).returncode
+                timeout=60).returncode
         except subprocess.TimeoutExpired:
-            pytest.fail("NO_PROXY client timed out after 120s")
+            pytest.fail("NO_PROXY client timed out after 60s")
         assert rc == 0, f"NO_PROXY bypass failed (exit {rc})"
     finally:
         stop_process(srv)

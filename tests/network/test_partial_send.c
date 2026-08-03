@@ -95,7 +95,7 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "FAIL: ws_connect\n");
 		return 1;
 	}
-	int budget = 600;
+	int budget = 300;
 	while (!s_done && budget > 0) {
 		ws_poll(ws, 100);
 		budget--;

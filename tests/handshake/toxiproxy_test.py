@@ -151,9 +151,9 @@ def run_pre_connect(toxic_name, echo_test_bin, proxy_port, up_port):
     print(f"Running: {echo_test_bin} {url}")
     try:
         rc = subprocess.run([echo_test_bin, url], env=build_env(echo_test_bin),
-                            timeout=120).returncode
+                            timeout=60).returncode
     except subprocess.TimeoutExpired:
-        print("echo_test exceeded 120s")
+        print("echo_test exceeded 60s")
         return 1
     print(f"echo_test exit code: {rc}")
     # For timeout/reset toxics, echo_test SHOULD fail (connection killed)
