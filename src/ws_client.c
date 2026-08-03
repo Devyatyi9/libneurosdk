@@ -12,7 +12,7 @@
 #endif
 
 /* ================================================================== */
-/*  Platform detection                                                 */
+/*  Platform detection                                                */
 /* ================================================================== */
 #if defined(_WIN32)
 #define WS_PLATFORM_WIN 1
@@ -73,7 +73,7 @@ typedef int SOCKET;
 #define WS_SEND_TIMEOUT_MS 5000
 
 /* ================================================================== */
-/*  Internal structures                                                 */
+/*  Internal structures                                               */
 /* ================================================================== */
 #define WS_RECV_BUF_SIZE 262144
 #define WS_DECOMPRESSED_MAX (16U * 1024U * 1024U)
@@ -142,8 +142,8 @@ struct ws_t {
 	int stream_masked; /* frame carried a client mask (defensive) */
 	unsigned char stream_mask[4];
 	uint64_t stream_payload_len;   /* total payload length of the frame */
-	uint64_t stream_payload_recvd; /* payload bytes received so far */
-	uint64_t stream_remaining;     /* payload bytes still to receive */
+	uint64_t stream_payload_recvd; /* payload bytes received so far     */
+	uint64_t stream_remaining;     /* payload bytes still to receive    */
 
 	/* Close handshake state */
 	int closing_initiated; /* non-zero if WE initiated the close */
@@ -159,7 +159,7 @@ struct ws_t {
 };
 
 /* ================================================================== */
-/*  socket_io — cross-platform socket abstraction                      */
+/*  socket_io — cross-platform socket abstraction                     */
 /* ================================================================== */
 
 #if defined(WS_PLATFORM_WIN)
@@ -353,7 +353,7 @@ static int sock_resolve(char const *host,
 }
 
 /* ================================================================== */
-/*  CSPRNG — replaces rand() for masking keys and Sec-WebSocket-Key    */
+/*  CSPRNG — replaces rand() for masking keys and Sec-WebSocket-Key   */
 /* ================================================================== */
 static int ws_random_bytes(unsigned char *buf, size_t len) {
 #if defined(_WIN32)
@@ -388,7 +388,7 @@ static int ws_random_bytes(unsigned char *buf, size_t len) {
 }
 
 /* ================================================================== */
-/*  URL parsing (minimal, only ws://)                                  */
+/*  URL parsing (minimal, only ws://)                                 */
 /* ================================================================== */
 static int parse_url(char const *url,
                      char **host,
@@ -463,7 +463,7 @@ static int parse_url(char const *url,
 }
 
 /* ================================================================== */
-/*  Forward declarations                                               */
+/*  Forward declarations                                              */
 /* ================================================================== */
 static void base64_encode(unsigned char const *in,
                           size_t inlen,
@@ -472,7 +472,7 @@ static void base64_encode(unsigned char const *in,
 static int ws_fail_message(ws_t *ws, uint16_t code, char const *message);
 
 /* ================================================================== */
-/*  HTTP upgrade                                                        */
+/*  HTTP upgrade                                                      */
 /* ================================================================== */
 static int build_upgrade_request(char *buf,
                                  size_t size,
@@ -525,7 +525,7 @@ static char const *ws_getenv(char const *name) {
 }
 
 /* ================================================================== */
-/*  SHA-1 (FIPS 180-4) — vendored, minimal, no external deps           */
+/*  SHA-1 (FIPS 180-4) — vendored, minimal, no external deps          */
 /* ================================================================== */
 struct sha1_ctx {
 	uint32_t state[5];
@@ -647,7 +647,7 @@ static void sha1_final(struct sha1_ctx *ctx, unsigned char out[20]) {
 }
 
 /* ================================================================== */
-/*  Base64 encode (RFC 4648 §4) — used for key gen + accept check      */
+/*  Base64 encode (RFC 4648 §4) — used for key gen + accept check     */
 /* ================================================================== */
 static void base64_encode(unsigned char const *in,
                           size_t inlen,
@@ -673,7 +673,7 @@ static void base64_encode(unsigned char const *in,
 }
 
 /* ================================================================== */
-/*  HTTP CONNECT proxy                                                 */
+/*  HTTP CONNECT proxy                                                */
 /* ================================================================== */
 
 /* Parse a proxy string: "host:port", "http://host:port",
@@ -864,7 +864,7 @@ static int no_proxy_match(char const *no_proxy, char const *host) {
 }
 
 /* ================================================================== */
-/*  HTTP upgrade response parser                                        */
+/*  HTTP upgrade response parser                                      */
 /* ================================================================== */
 
 static int ws_token_char(unsigned char c) {
@@ -1110,7 +1110,7 @@ static int parse_upgrade_response(char const *buf,
 }
 
 /* ================================================================== */
-/*  Fragmented-message reassembly buffer                               */
+/*  Fragmented-message reassembly buffer                              */
 /* ================================================================== */
 static int frag_append(ws_t *ws, unsigned char const *data, size_t len) {
 	if (len > SIZE_MAX - ws->frag_len)
@@ -1138,7 +1138,7 @@ static int frag_append(ws_t *ws, unsigned char const *data, size_t len) {
 }
 
 /* ================================================================== */
-/*  Public API                                                          */
+/*  Public API                                                        */
 /* ================================================================== */
 
 int ws_connect(ws_t **out, char const *url, ws_callbacks_t callbacks) {

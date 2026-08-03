@@ -63,32 +63,32 @@ static char *duplicate_string(char const *value) {
 #define STR_HELPER(x) #x
 #define STR(x) STR_HELPER(x)
 
-#define LOG_DEBUG(context, ...)                                        \
+#define LOG_DEBUG(context, ...)                                          \
 	if (context->debug_prints && aprintf(&context->logm, __VA_ARGS__)) { \
-		context->callback_log(NeuroSDK_Severity_Debug, context->logm,      \
-		                      context->user_data);                         \
-		free(context->logm);                                               \
+		context->callback_log(NeuroSDK_Severity_Debug, context->logm,    \
+		                      context->user_data);                       \
+		free(context->logm);                                             \
 	}
 
-#define LOG_INFO(context, ...)                                              \
+#define LOG_INFO(context, ...)                                                \
 	if (context->validation_layers && aprintf(&context->logm, __VA_ARGS__)) { \
-		context->callback_log(NeuroSDK_Severity_Info, context->logm,            \
-		                      context->user_data);                              \
-		free(context->logm);                                                    \
+		context->callback_log(NeuroSDK_Severity_Info, context->logm,          \
+		                      context->user_data);                            \
+		free(context->logm);                                                  \
 	}
 
-#define LOG_WARN(context, ...)                                              \
+#define LOG_WARN(context, ...)                                                \
 	if (context->validation_layers && aprintf(&context->logm, __VA_ARGS__)) { \
-		context->callback_log(NeuroSDK_Severity_Warn, context->logm,            \
-		                      context->user_data);                              \
-		free(context->logm);                                                    \
+		context->callback_log(NeuroSDK_Severity_Warn, context->logm,          \
+		                      context->user_data);                            \
+		free(context->logm);                                                  \
 	}
 
-#define LOG_ERROR(context, ...)                                             \
+#define LOG_ERROR(context, ...)                                               \
 	if (context->validation_layers && aprintf(&context->logm, __VA_ARGS__)) { \
-		context->callback_log(NeuroSDK_Severity_Error, context->logm,           \
-		                      context->user_data);                              \
-		free(context->logm);                                                    \
+		context->callback_log(NeuroSDK_Severity_Error, context->logm,         \
+		                      context->user_data);                            \
+		free(context->logm);                                                  \
 	}
 
 static void default_logger(neurosdk_severity_e severity,
