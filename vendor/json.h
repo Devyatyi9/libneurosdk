@@ -453,6 +453,9 @@ typedef struct json_parse_result_s {
 #elif defined(_MSC_VER)
 #pragma warning(push)
 
+/* disable 'function not inlined' warning. */
+#pragma warning(disable : 4710)
+
 /* disable 'function selected for inline expansion' warning. */
 #pragma warning(disable : 4711)
 
@@ -878,7 +881,7 @@ int json_get_string_size(struct json_parse_state_s *state, size_t is_key) {
 json_weak int is_valid_unquoted_key_char(const char c);
 int is_valid_unquoted_key_char(const char c) {
   return (('0' <= c && c <= '9') || ('a' <= c && c <= 'z') ||
-          ('A' <= c && c <= 'Z') || ('_' == c));
+          ('A' <= c && c <= 'Z') || ('_' == c) || ('$' == c));
 }
 
 json_weak int json_get_key_size(struct json_parse_state_s *state);
@@ -940,9 +943,9 @@ int json_get_object_size(struct json_parse_state_s *state,
   int found_closing_brace = 0;
 
   if (++state->recursion > JSON_MAX_RECURSION) {
-      // recursion error
-      state->error = json_parse_error_recursion;
-      return 1;
+    /* recursion error */
+    state->error = json_parse_error_recursion;
+    return 1;
   }
 
   if (is_global_object) {
@@ -1094,9 +1097,9 @@ int json_get_array_size(struct json_parse_state_s *state) {
   const size_t size = state->size;
 
   if (++state->recursion > JSON_MAX_RECURSION) {
-      // recursion error
-      state->error = json_parse_error_recursion;
-      return 1;
+    /* recursion error */
+    state->error = json_parse_error_recursion;
+    return 1;
   }
 
   if ('[' != src[state->offset]) {
@@ -1250,28 +1253,9 @@ int json_get_number_size(struct json_parse_state_s *state) {
       }
 
       if (inf_or_nan) {
-        if (offset < size) {
-          switch (src[offset]) {
-          default:
-            break;
-          case '0':
-          case '1':
-          case '2':
-          case '3':
-          case '4':
-          case '5':
-          case '6':
-          case '7':
-          case '8':
-          case '9':
-          case 'e':
-          case 'E':
-            /* cannot follow an inf or nan with digits! */
-            state->error = json_parse_error_invalid_number_format;
-            state->offset = offset;
-            return 1;
-          }
-        }
+        /* Infinity and NaN are complete values. Validate the next character as
+         * a number terminator instead of parsing a numeric continuation. */
+        goto number_parsed;
       }
     }
 
@@ -1356,6 +1340,7 @@ int json_get_number_size(struct json_parse_state_s *state) {
     }
   }
 
+number_parsed:
   if (offset < size) {
     switch (src[offset]) {
     case ' ':
@@ -1918,7 +1903,7 @@ void json_parse_number(struct json_parse_state_s *state,
   number->number = data;
 
   if (json_parse_flags_allow_hexadecimal_numbers & flags_bitset) {
-    if (('0' == src[offset]) &&
+    if ((offset + 1 < size) && ('0' == src[offset]) &&
         (('x' == src[offset + 1]) || ('X' == src[offset + 1]))) {
       /* consume hexadecimal digits. */
       while ((offset < size) &&
@@ -2380,7 +2365,11 @@ void json_extract_copy_value(struct json_extract_state_s *const state,
     state->dom += sizeof(struct json_object_s);
 
     element = object->start;
-    object->start = (struct json_object_element_s *)state->dom;
+    object->start = json_null;
+
+    if (0 < object->length) {
+      object->start = (struct json_object_element_s *)state->dom;
+    }
 
     for (i = 0; i < object->length; i++) {
       struct json_value_s *previous_value;
@@ -2420,7 +2409,11 @@ void json_extract_copy_value(struct json_extract_state_s *const state,
     state->dom += sizeof(struct json_array_s);
 
     element = array->start;
-    array->start = (struct json_array_element_s *)state->dom;
+    array->start = json_null;
+
+    if (0 < array->length) {
+      array->start = (struct json_array_element_s *)state->dom;
+    }
 
     for (i = 0; i < array->length; i++) {
       struct json_value_s *previous_value;
@@ -2543,10 +2536,10 @@ int json_write_get_number_size(const struct json_number_s *number,
 
       i = 0;
 
-      while (0 != parsed_number) {
+      do {
         parsed_number /= 10;
         i++;
-      }
+      } while (0 != parsed_number);
 
       *size += i;
       return 0;
@@ -2785,10 +2778,10 @@ char *json_write_number(const struct json_number_s *number, char *data) {
 
       i = 0;
 
-      while (0 != parsed_number) {
+      do {
         parsed_number /= 10;
         i++;
-      }
+      } while (0 != parsed_number);
 
       /* Restore parsed_number to its original value stored in the backup. */
       parsed_number = backup;
