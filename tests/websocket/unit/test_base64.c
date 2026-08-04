@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include "../../src/ws_client.c"
+#include "../../../src/ws_client.c"
 
 static int failed = 0;
 

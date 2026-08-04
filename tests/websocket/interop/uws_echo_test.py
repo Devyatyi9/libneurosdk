@@ -3,10 +3,10 @@
 import os, socket, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.join(HERE, "..", "..")
+ROOT = os.path.join(HERE, "..", "..", "..")
 UWS_COMMIT = "fe7da4cb05622b8d004718ec3ca05101782eb1c2"
 
-sys.path.insert(0, os.path.join(ROOT, "tests"))
+sys.path.insert(0, os.path.join(ROOT, "tests", "websocket"))
 from test_utils import build_env, find_echo_test
 
 def main():

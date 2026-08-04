@@ -7,9 +7,9 @@ then does the same via the ws:// nginx endpoint.
 import os, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.join(HERE, "..", "..")
+ROOT = os.path.join(HERE, "..", "..", "..")
 
-sys.path.insert(0, os.path.join(ROOT, "tests"))
+sys.path.insert(0, os.path.join(ROOT, "tests", "websocket"))
 from test_utils import build_env, find_echo_test
 
 
@@ -79,9 +79,9 @@ def main():
     uws_bin = None
     for p in [
         os.path.join(ROOT, "uws_echo.exe" if sys.platform == "win32" else "uws_echo"),
-        os.path.join(ROOT, "tests", "interop", "build", "Release",
+        os.path.join(ROOT, "tests", "websocket", "interop", "build", "Release",
                      "uws_echo.exe" if sys.platform == "win32" else "uws_echo"),
-        os.path.join(ROOT, "tests", "interop", "build",
+        os.path.join(ROOT, "tests", "websocket", "interop", "build",
                      "uws_echo.exe" if sys.platform == "win32" else "uws_echo"),
     ]:
         if os.path.isfile(p):

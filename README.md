@@ -2,7 +2,7 @@
 
 C SDK for interacting with the Neuro API.
 
-[![Build and Test](../../actions/workflows/test.yml/badge.svg?branch=master)](../../actions/workflows/test.yml?query=branch%3Amaster)
+[![Test and Build WebSocket Layer](../../actions/workflows/websocket.yml/badge.svg?branch=master)](../../actions/workflows/websocket.yml?query=branch%3Amaster)
 
 ## Documentation
 
@@ -18,4 +18,3 @@ codebase, which you can make sure you do by using `clang-format`.
 
 This project is licensed under the GPLv3 license. For more information, check
 out the [LICENSE](LICENSE) file.
-

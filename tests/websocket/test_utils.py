@@ -2,7 +2,7 @@
 import glob, os, subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.join(HERE, "..")
+ROOT = os.path.join(HERE, "..", "..")
 
 def pe_arch(path):
     """Detect PE machine type: 'x86' or 'x64', or None."""

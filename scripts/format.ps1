@@ -37,7 +37,7 @@ $files = @(
         Where-Object {
             $_ -match $extensions -and
             $_ -notmatch '^vendor/' -and
-            $_ -notmatch '^tests/interop/uWebSockets/'
+            $_ -notmatch '^tests/websocket/interop/uWebSockets/'
         }
 )
 if ($LASTEXITCODE -ne 0) {

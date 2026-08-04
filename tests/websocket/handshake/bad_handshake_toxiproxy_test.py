@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from test_utils import build_env, find_echo_test, stop_process
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.join(HERE, "..", "..")
+ROOT = os.path.join(HERE, "..", "..", "..")
 TOXIPROXY_PORT = 8474
 UPSTREAM_PORT = 19001
 PROXY_PORT = 19002

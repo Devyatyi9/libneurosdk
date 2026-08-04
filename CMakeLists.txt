@@ -151,16 +151,16 @@ if(NEURO_BUILD_TESTS)
 		target_link_libraries(ws_client_test PUBLIC ws2_32 bcrypt)
 	endif()
 
-	add_executable(echo_test tests/integration/echo_test.c)
+	add_executable(echo_test tests/websocket/integration/echo_test.c)
 	target_link_libraries(echo_test PRIVATE ws_client_test)
 
-	add_executable(integration_test tests/integration/integration_test.c)
+	add_executable(integration_test tests/websocket/integration/integration_test.c)
 	target_link_libraries(integration_test PRIVATE ws_client_test)
 
-	add_executable(fuzzing_client tests/autobahn/fuzzing_client.c)
+	add_executable(fuzzing_client tests/websocket/autobahn/fuzzing_client.c)
 	target_link_libraries(fuzzing_client PRIVATE ws_client_test)
 	
-	add_executable(long_session tests/perf/long_session.c)
+	add_executable(long_session tests/websocket/perf/long_session.c)
 	target_link_libraries(long_session PRIVATE ws_client_test)
 
 	# Unit tests (include ws_client.c directly for static function access)
@@ -169,7 +169,7 @@ if(NEURO_BUILD_TESTS)
 		list(APPEND UNIT_TESTS test_ws_deflate)
 	endif()
 	foreach(t ${UNIT_TESTS})
-		add_executable(${t} tests/unit/${t}.c)
+		add_executable(${t} tests/websocket/unit/${t}.c)
 		target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 		if(t STREQUAL "test_ws_deflate")
 			target_sources(${t} PRIVATE
@@ -190,7 +190,7 @@ if(NEURO_BUILD_TESTS)
 	# Network I/O test clients exercise ws_client directly.
 	set(NET_TESTS test_partial_send test_flood test_double_close test_oversize proxy_test test_large_frame test_peer_close test_negative test_pmd)
 	foreach(t ${NET_TESTS})
-		add_executable(${t} tests/network/${t}.c)
+		add_executable(${t} tests/websocket/network/${t}.c)
 		target_link_libraries(${t} PRIVATE ws_client_test)
 	endforeach()
 

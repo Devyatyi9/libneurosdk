@@ -25,5 +25,7 @@ examples/tictactoe
 result
 autobahn-reports/*
 __pycache__/
+tests/websocket/interop/uWebSockets/
+tests/websocket/network/servers/proxy.log
 tests/interop/uWebSockets/
 tests/network/servers/proxy.log

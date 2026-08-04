@@ -4,17 +4,17 @@ Tests #5-20 as defined in the test plan. Each test starts a Python
 test server, runs a C test client against it, and checks exit codes.
 
 Usage:
-    python -m pytest tests/network/test_network.py -v
+    python -m pytest tests/websocket/network/test_network.py -v
 """
 import os, sys, subprocess, time, socket, platform, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.join(HERE, "..", "..")
-sys.path.insert(0, os.path.join(ROOT, "tests"))
+ROOT = os.path.join(HERE, "..", "..", "..")
+sys.path.insert(0, os.path.join(ROOT, "tests", "websocket"))
 from test_utils import build_env, find_tool, find_echo_test, stop_process
 
 SERVERS_DIR = os.path.join(HERE, "servers")
-HANDSHAKE_DIR = os.path.join(ROOT, "tests", "handshake")
+HANDSHAKE_DIR = os.path.join(ROOT, "tests", "websocket", "handshake")
 
 import pytest
 
@@ -89,7 +89,7 @@ def _wait_server(proc, name, timeout=10):
 
 # ---- Sanity Checks (#5-#7) ----
 
-ECHO_SERVER = os.path.join(ROOT, "tests", "integration", "echo_server.py")
+ECHO_SERVER = os.path.join(ROOT, "tests", "websocket", "integration", "echo_server.py")
 
 
 def _find_uws():
@@ -97,8 +97,8 @@ def _find_uws():
     exe = ".exe" if sys.platform == "win32" else ""
     candidates = [
         os.path.join(ROOT, "uws_echo" + exe),
-        os.path.join(ROOT, "tests", "interop", "build", "Release", "uws_echo" + exe),
-        os.path.join(ROOT, "tests", "interop", "build", "uws_echo" + exe),
+        os.path.join(ROOT, "tests", "websocket", "interop", "build", "Release", "uws_echo" + exe),
+        os.path.join(ROOT, "tests", "websocket", "interop", "build", "uws_echo" + exe),
     ]
     for p in candidates:
         if os.path.isfile(p):
@@ -108,7 +108,7 @@ def _find_uws():
 def _start_uws(port):
     """Start uWS echo-server (required — no fallback)."""
     uws_bin = _find_uws()
-    assert uws_bin, "uws_echo binary not found — build tests/interop first"
+    assert uws_bin, "uws_echo binary not found — build tests/websocket/interop first"
     proc = subprocess.Popen([uws_bin, str(port)],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     assert _wait_port(port), f"uWS echo-server did not start on port {port}"
