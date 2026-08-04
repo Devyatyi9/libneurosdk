@@ -177,8 +177,9 @@ NEUROSDK_EXPORT char const *neurosdk_git_hash(void);
 // Error Handling
 NEUROSDK_EXPORT char const *neurosdk_error_string(neurosdk_error_e err);
 
-// Message Management. Destroy every message returned by neurosdk_context_poll().
-// The returned array remains owned by its context and may be reused by later polls.
+// Message Management. Destroy every message returned by
+// neurosdk_context_poll(). The returned array remains owned by its context and
+// may be reused by later polls.
 NEUROSDK_EXPORT neurosdk_error_e
 neurosdk_message_destroy(neurosdk_message_t *msg);
 

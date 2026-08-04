@@ -1,11 +1,14 @@
 #include "ws_client.h"
 
-#include <errno.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if !defined(_WIN32)
+#include <errno.h>
+#endif
 
 #ifdef WS_ENABLE_PERMESSAGE_DEFLATE
 #include "ws_deflate.h"
