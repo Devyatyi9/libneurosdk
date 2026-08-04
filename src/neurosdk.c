@@ -1,6 +1,5 @@
 #include <neurosdk.h>
 
-#include <ctype.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -33,6 +32,7 @@
 
 #define ENVIRONMENT_VARIABLE_NAME "NEURO_SDK_WS_URL"
 #define MESSAGE_QUEUE_SIZE 10
+#define PROTOCOL_MESSAGE_MAX_SIZE (16U * 1024U * 1024U)
 
 static char const *neurosdk_getenv(char const *name) {
 #ifdef _MSC_VER
@@ -52,6 +52,31 @@ static char *duplicate_string(char const *value) {
 	if (copy)
 		memcpy(copy, value, size);
 	return copy;
+}
+
+static char *duplicate_string_n(char const *value, size_t length) {
+	if (length == SIZE_MAX)
+		return NULL;
+	char *copy = malloc(length + 1);
+	if (copy) {
+		memcpy(copy, value, length);
+		copy[length] = '\0';
+	}
+	return copy;
+}
+
+static bool json_string_equals(json_string_t const *value,
+                               char const *expected,
+                               size_t expected_length) {
+	return value && value->string_size == expected_length &&
+	       memcmp(value->string, expected, expected_length) == 0;
+}
+
+#define JSON_STRING_EQUALS(value, literal) \
+	json_string_equals((value), (literal), sizeof(literal) - 1)
+
+static bool json_string_contains_nul(json_string_t const *value) {
+	return memchr(value->string, '\0', value->string_size) != NULL;
 }
 
 #ifndef LIB_VERSION
@@ -312,11 +337,11 @@ static void message_cleanup(neurosdk_message_t *msg) {
 static neurosdk_error_e parse_s2c_json(context_t *ctx,
                                        neurosdk_message_t *msg,
                                        char const *json,
-                                       int len) {
+                                       size_t len) {
 	if (!ctx) {
 		return NeuroSDK_Uninitialized;
 	}
-	if (!json || len <= 0) {
+	if (!json || len == 0) {
 		LOG_ERROR(ctx, "[parse_s2c_json] Provided JSON is empty or null.");
 		return NeuroSDK_InvalidJSON;
 	}
@@ -340,15 +365,20 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 	neurosdk_message_kind_e kind = 0xFFFF;
 
 	while (root_elem) {
-		if (!strcmp(root_elem->name->string, "command")) {
+		if (JSON_STRING_EQUALS(root_elem->name, "command")) {
 			if (root_elem->value->type != json_type_string) {
 				LOG_ERROR(ctx, "[parse_s2c_json] 'command' field is not a string.");
 				res = NeuroSDK_InvalidJSON;
 				goto cleanup;
 			}
 			json_string_t *value_str = (json_string_t *)root_elem->value->payload;
+			if (json_string_contains_nul(value_str)) {
+				LOG_ERROR(ctx, "[parse_s2c_json] 'command' contains a null character.");
+				res = NeuroSDK_InvalidJSON;
+				goto cleanup;
+			}
 
-			if (!strcmp(value_str->string, "action")) {
+			if (JSON_STRING_EQUALS(value_str, "action")) {
 				kind = NeuroSDK_MessageKind_Action;
 			} else {
 				LOG_ERROR(ctx, "[parse_s2c_json] Unknown command '%s'.",
@@ -370,7 +400,7 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 		bool data_found = false;
 		root_elem = root_obj->start;
 		while (root_elem) {
-			if (!strcmp(root_elem->name->string, "data")) {
+			if (JSON_STRING_EQUALS(root_elem->name, "data")) {
 				data_found = true;
 				if (root_elem->value->type != json_type_object) {
 					LOG_ERROR(ctx, "[parse_s2c_json] 'data' field is not an object.");
@@ -383,36 +413,55 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 				char *id = NULL, *name = NULL, *data = NULL;
 
 				while (obj_root) {
-					if (!strcmp(obj_root->name->string, "id")) {
+					if (JSON_STRING_EQUALS(obj_root->name, "id")) {
 						if (obj_root->value->type != json_type_string) {
 							LOG_ERROR(ctx, "[parse_s2c_json] 'id' field must be a string.");
 							res = NeuroSDK_InvalidJSON;
 							goto parse_cleanup;
 						}
 						json_string_t *str = (json_string_t *)obj_root->value->payload;
-						id = duplicate_string(str->string);
+						if (json_string_contains_nul(str)) {
+							LOG_ERROR(ctx,
+							          "[parse_s2c_json] 'id' contains a null character.");
+							res = NeuroSDK_InvalidJSON;
+							goto parse_cleanup;
+						}
+						id = duplicate_string_n(str->string, str->string_size);
 						if (!id) {
 							res = NeuroSDK_OutOfMemory;
 							goto parse_cleanup;
 						}
-					} else if (!strcmp(obj_root->name->string, "name")) {
+					} else if (JSON_STRING_EQUALS(obj_root->name, "name")) {
 						if (obj_root->value->type != json_type_string) {
 							LOG_ERROR(ctx, "[parse_s2c_json] 'name' field must be a string.");
 							res = NeuroSDK_InvalidJSON;
 							goto parse_cleanup;
 						}
 						json_string_t *str = (json_string_t *)obj_root->value->payload;
-						name = duplicate_string(str->string);
+						if (json_string_contains_nul(str)) {
+							LOG_ERROR(ctx,
+							          "[parse_s2c_json] 'name' contains a null character.");
+							res = NeuroSDK_InvalidJSON;
+							goto parse_cleanup;
+						}
+						name = duplicate_string_n(str->string, str->string_size);
 						if (!name) {
 							res = NeuroSDK_OutOfMemory;
 							goto parse_cleanup;
 						}
-					} else if (!strcmp(obj_root->name->string, "data")) {
+					} else if (JSON_STRING_EQUALS(obj_root->name, "data")) {
 						if (obj_root->value->type == json_type_null) {
 							data = NULL;
 						} else if (obj_root->value->type == json_type_string) {
 							json_string_t *str = (json_string_t *)obj_root->value->payload;
-							data = duplicate_string(str->string);
+							if (json_string_contains_nul(str)) {
+								LOG_ERROR(ctx,
+								          "[parse_s2c_json] action 'data' contains a null "
+								          "character.");
+								res = NeuroSDK_InvalidJSON;
+								goto parse_cleanup;
+							}
+							data = duplicate_string_n(str->string, str->string_size);
 							if (!data) {
 								res = NeuroSDK_OutOfMemory;
 								goto parse_cleanup;
@@ -489,16 +538,14 @@ static void ws_on_message(ws_t *ws,
 		ctx->conn_err = NeuroSDK_ReceivedBinary;
 		return;
 	}
-	for (size_t i = 0; i < len; i++) {
-		if (!isprint((unsigned char)data[i]) && !isspace((unsigned char)data[i])) {
-			LOG_ERROR(ctx, "Received binary (non-plaintext) data from server!");
-			ctx->conn_err = NeuroSDK_ReceivedBinary;
-			return;
-		}
+	if (len > PROTOCOL_MESSAGE_MAX_SIZE) {
+		LOG_ERROR(ctx, "Received protocol JSON exceeds the message size limit.");
+		ctx->conn_err = NeuroSDK_InvalidJSON;
+		return;
 	}
 	neurosdk_message_t msg = {0};
 	LOG_DEBUG(ctx, "Received message: %.*s", (int)len, data);
-	ctx->conn_err = parse_s2c_json(ctx, &msg, data, (int)len);
+	ctx->conn_err = parse_s2c_json(ctx, &msg, data, len);
 	if (!ctx->conn_err) {
 		if (ctx->message_queue_size == ctx->message_queue_cap) {
 			LOG_ERROR(ctx, "Message queue is full! (NeuroSDK_MessageQueueFull).");

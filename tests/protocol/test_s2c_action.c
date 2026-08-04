@@ -21,8 +21,12 @@ static context_t make_context(neurosdk_message_t *queue, int capacity) {
 	return context;
 }
 
+static void receive_n(context_t *context, char const *json, size_t length) {
+	ws_on_message(NULL, json, length, 0, context);
+}
+
 static void receive(context_t *context, char const *json) {
-	ws_on_message(NULL, json, strlen(json), 0, context);
+	receive_n(context, json, strlen(json));
 }
 
 static void test_valid_action(void) {
@@ -57,6 +61,24 @@ static void test_null_action_data(void) {
 	CHECK(neurosdk_message_destroy(&queue[0]) == NeuroSDK_None);
 }
 
+static void test_utf8_action(void) {
+	static char const utf8_name[] =
+	    "\320\277\321\200\321\213\320\266\320\276\320\272";
+	static char const json[] =
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":\""
+	    "\320\277\321\200\321\213\320\266\320\276\320\272"
+	    "\",\"data\":null}}";
+	neurosdk_message_t queue[1] = {0};
+	context_t context = make_context(queue, 1);
+
+	receive(&context, json);
+
+	CHECK(context.conn_err == NeuroSDK_None);
+	CHECK(context.message_queue_size == 1);
+	CHECK(strcmp(queue[0].value.action.name, utf8_name) == 0);
+	CHECK(neurosdk_message_destroy(&queue[0]) == NeuroSDK_None);
+}
+
 static void test_invalid_action(char const *json) {
 	neurosdk_message_t queue[1] = {0};
 	context_t context = make_context(queue, 1);
@@ -74,6 +96,39 @@ static void test_invalid_actions(void) {
 	test_invalid_action("{\"command\":\"action\",\"data\":{\"id\":\"42\"}}");
 	test_invalid_action(
 	    "{\"command\":\"action\",\"data\":{\"id\":\"allocated\",\"name\":42}}");
+	test_invalid_action(
+	    "{\"command\\u0000ignored\":\"action\",\"data\":{\"id\":\"42\",\"name\":"
+	    "\"jump\"}}");
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\\u0000ignored\":{\"id\":\"42\",\"name\":"
+	    "\"jump\"}}");
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\\u0000ignored\":\"42\",\"name\":"
+	    "\"jump\"}}");
+	test_invalid_action(
+	    "{\"command\":\"action\\u0000ignored\",\"data\":{\"id\":\"42\",\"name\":"
+	    "\"jump\"}}");
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\\u0000ignored\",\"name\":"
+	    "\"jump\"}}");
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":"
+	    "\"jump\\u0000ignored\"}}");
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":\"jump\","
+	    "\"data\":\"{}\\u0000ignored\"}}");
+}
+
+static void test_raw_nul(void) {
+	static char const json[] =
+	    "{\"command\":\"action\",\0\"data\":{\"id\":\"42\",\"name\":\"jump\"}}";
+	neurosdk_message_t queue[1] = {0};
+	context_t context = make_context(queue, 1);
+
+	receive_n(&context, json, sizeof(json) - 1);
+
+	CHECK(context.conn_err == NeuroSDK_InvalidJSON);
+	CHECK(context.message_queue_size == 0);
 }
 
 static void check_parse_is_transactional(char const *json) {
@@ -89,7 +144,7 @@ static void check_parse_is_transactional(char const *json) {
 	};
 	neurosdk_message_t actual = expected;
 
-	CHECK(parse_s2c_json(&context, &actual, json, (int)strlen(json)) ==
+	CHECK(parse_s2c_json(&context, &actual, json, strlen(json)) ==
 	      NeuroSDK_InvalidJSON);
 	CHECK(memcmp(&actual, &expected, sizeof(actual)) == 0);
 }
@@ -109,6 +164,31 @@ static void test_queue_full(void) {
 
 	CHECK(context.conn_err == NeuroSDK_MessageQueueFull);
 	CHECK(context.message_queue_size == 0);
+}
+
+static void test_message_size_limit(void) {
+	static char const prefix[] =
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":\"jump\"}}";
+	char *json = malloc((size_t)PROTOCOL_MESSAGE_MAX_SIZE + 1);
+	CHECK(json != NULL);
+	if (!json)
+		return;
+	memcpy(json, prefix, sizeof(prefix) - 1);
+	memset(json + sizeof(prefix) - 1, ' ',
+	       (size_t)PROTOCOL_MESSAGE_MAX_SIZE + 1 - (sizeof(prefix) - 1));
+
+	neurosdk_message_t queue[1] = {0};
+	context_t context = make_context(queue, 1);
+	receive_n(&context, json, PROTOCOL_MESSAGE_MAX_SIZE);
+	CHECK(context.conn_err == NeuroSDK_None);
+	CHECK(context.message_queue_size == 1);
+	CHECK(neurosdk_message_destroy(&queue[0]) == NeuroSDK_None);
+
+	context = make_context(queue, 1);
+	receive_n(&context, json, (size_t)PROTOCOL_MESSAGE_MAX_SIZE + 1);
+	CHECK(context.conn_err == NeuroSDK_InvalidJSON);
+	CHECK(context.message_queue_size == 0);
+	free(json);
 }
 
 static void test_destroy_with_queued_action(void) {
@@ -149,9 +229,12 @@ static void test_destroy_with_queued_action(void) {
 int main(void) {
 	test_valid_action();
 	test_null_action_data();
+	test_utf8_action();
 	test_invalid_actions();
+	test_raw_nul();
 	test_parse_is_transactional();
 	test_queue_full();
+	test_message_size_limit();
 	test_destroy_with_queued_action();
 
 	if (failures) {
