@@ -298,6 +298,17 @@ NEUROSDK_EXPORT char const *neurosdk_error_string(neurosdk_error_e err) {
 	}
 }
 
+static void message_cleanup(neurosdk_message_t *msg) {
+	if (!msg)
+		return;
+	if (msg->kind == NeuroSDK_MessageKind_Action) {
+		free(msg->value.action.id);
+		free(msg->value.action.name);
+		free(msg->value.action.data);
+	}
+	memset(msg, 0, sizeof(*msg));
+}
+
 static neurosdk_error_e parse_s2c_json(context_t *ctx,
                                        neurosdk_message_t *msg,
                                        char const *json,
@@ -311,6 +322,7 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 	}
 
 	neurosdk_error_e res = NeuroSDK_None;
+	neurosdk_message_t parsed = {0};
 	json_value_t *root = json_parse(json, len);
 	if (!root) {
 		LOG_ERROR(ctx, "[parse_s2c_json] Could not parse message: invalid JSON.");
@@ -355,9 +367,11 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 	}
 
 	if (kind == NeuroSDK_MessageKind_Action) {
+		bool data_found = false;
 		root_elem = root_obj->start;
 		while (root_elem) {
 			if (!strcmp(root_elem->name->string, "data")) {
+				data_found = true;
 				if (root_elem->value->type != json_type_object) {
 					LOG_ERROR(ctx, "[parse_s2c_json] 'data' field is not an object.");
 					res = NeuroSDK_InvalidJSON;
@@ -377,6 +391,10 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 						}
 						json_string_t *str = (json_string_t *)obj_root->value->payload;
 						id = duplicate_string(str->string);
+						if (!id) {
+							res = NeuroSDK_OutOfMemory;
+							goto parse_cleanup;
+						}
 					} else if (!strcmp(obj_root->name->string, "name")) {
 						if (obj_root->value->type != json_type_string) {
 							LOG_ERROR(ctx, "[parse_s2c_json] 'name' field must be a string.");
@@ -385,12 +403,20 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 						}
 						json_string_t *str = (json_string_t *)obj_root->value->payload;
 						name = duplicate_string(str->string);
+						if (!name) {
+							res = NeuroSDK_OutOfMemory;
+							goto parse_cleanup;
+						}
 					} else if (!strcmp(obj_root->name->string, "data")) {
 						if (obj_root->value->type == json_type_null) {
 							data = NULL;
 						} else if (obj_root->value->type == json_type_string) {
 							json_string_t *str = (json_string_t *)obj_root->value->payload;
 							data = duplicate_string(str->string);
+							if (!data) {
+								res = NeuroSDK_OutOfMemory;
+								goto parse_cleanup;
+							}
 						} else {
 							LOG_ERROR(
 							    ctx,
@@ -410,12 +436,13 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 					goto parse_cleanup;
 				}
 
-				msg->kind = NeuroSDK_MessageKind_Action;
-				msg->value.action = (neurosdk_message_action_t){
+				parsed.kind = NeuroSDK_MessageKind_Action;
+				parsed.value.action = (neurosdk_message_action_t){
 				    .id = id,
 				    .name = name,
 				    .data = data,
 				};
+				*msg = parsed;
 				goto cleanup;
 			parse_cleanup:
 				if (id)
@@ -427,6 +454,10 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 				goto cleanup;
 			}
 			root_elem = root_elem->next;
+		}
+		if (!data_found) {
+			LOG_ERROR(ctx, "[parse_s2c_json] Missing 'data' field for 'action'.");
+			res = NeuroSDK_InvalidJSON;
 		}
 	} else {
 		LOG_ERROR(ctx, "[parse_s2c_json] Received an unhandled S2C command.");
@@ -465,13 +496,14 @@ static void ws_on_message(ws_t *ws,
 			return;
 		}
 	}
-	neurosdk_message_t msg;
+	neurosdk_message_t msg = {0};
 	LOG_DEBUG(ctx, "Received message: %.*s", (int)len, data);
 	ctx->conn_err = parse_s2c_json(ctx, &msg, data, (int)len);
 	if (!ctx->conn_err) {
 		if (ctx->message_queue_size == ctx->message_queue_cap) {
 			LOG_ERROR(ctx, "Message queue is full! (NeuroSDK_MessageQueueFull).");
 			ctx->conn_err = NeuroSDK_MessageQueueFull;
+			message_cleanup(&msg);
 			return;
 		}
 		ctx->message_queue[ctx->message_queue_size++] = msg;
@@ -531,12 +563,18 @@ neurosdk_context_create(neurosdk_context_t *ctx,
 	context->pending_messages_size = 0;
 	context->pending_messages =
 	    malloc(context->pending_messages_cap * sizeof(char *));
+	if (!context->pending_messages) {
+		free((void *)context->game_name);
+		free(context);
+		return NeuroSDK_OutOfMemory;
+	}
 
 	context->message_queue_cap = MESSAGE_QUEUE_SIZE;
 	context->message_queue_size = 0;
 	context->message_queue =
 	    malloc(context->message_queue_cap * sizeof(neurosdk_message_t));
 	if (!context->message_queue) {
+		free(context->pending_messages);
 		free((void *)context->game_name);
 		free(context);
 		return NeuroSDK_OutOfMemory;
@@ -612,6 +650,9 @@ neurosdk_context_destroy(neurosdk_context_t *ctx) {
 	mtx_destroy(&context->out_mtx);
 
 	free(context->pending_messages);
+	for (int i = 0; i < context->message_queue_size; i++) {
+		message_cleanup(&context->message_queue[i]);
+	}
 	free(context->message_queue);
 	free((void *)context->game_name);
 	free(context);
@@ -1031,11 +1072,7 @@ neurosdk_message_destroy(neurosdk_message_t *msg) {
 		return NeuroSDK_Uninitialized;
 	}
 	if (msg->kind == NeuroSDK_MessageKind_Action) {
-		neurosdk_message_action_t *action = &msg->value.action;
-		free(action->id);
-		free(action->name);
-		if (action->data)
-			free(action->data);
+		message_cleanup(msg);
 	} else {
 		return NeuroSDK_UnknownCommand;
 	}

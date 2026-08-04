@@ -151,6 +151,19 @@ if(NEURO_BUILD_TESTS)
 		target_link_libraries(ws_client_test PUBLIC ws2_32 bcrypt)
 	endif()
 
+	add_executable(test_s2c_action tests/protocol/test_s2c_action.c)
+	target_include_directories(test_s2c_action PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/include
+		${CMAKE_CURRENT_SOURCE_DIR}/vendor
+		${CMAKE_CURRENT_SOURCE_DIR}/src
+	)
+	target_compile_definitions(test_s2c_action PRIVATE
+		LIB_VERSION=${PROJECT_VERSION}
+		LIB_BUILD_HASH=${LIB_BUILD_HASH}
+	)
+	target_link_libraries(test_s2c_action PRIVATE ws_client_test)
+	add_custom_target(protocol_test_suite DEPENDS test_s2c_action)
+
 	add_executable(echo_test tests/websocket/integration/echo_test.c)
 	target_link_libraries(echo_test PRIVATE ws_client_test)
 
