@@ -107,8 +107,8 @@ static bool json_builder_reserve(json_builder_t *builder, size_t additional) {
 }
 
 static bool json_builder_append_n(json_builder_t *builder,
-	                              char const *value,
-	                              size_t length) {
+                                  char const *value,
+                                  size_t length) {
 	if (!json_builder_reserve(builder, length))
 		return false;
 	memcpy(builder->data + builder->size, value, length);
@@ -121,7 +121,7 @@ static bool json_builder_append_n(json_builder_t *builder,
 	json_builder_append_n((builder), (literal), sizeof(literal) - 1)
 
 static bool json_builder_append_string(json_builder_t *builder,
-	                                   char const *value) {
+                                       char const *value) {
 	static char const hex[] = "0123456789ABCDEF";
 	if (!value) {
 		builder->error = NeuroSDK_InvalidMessage;
@@ -140,14 +140,29 @@ static bool json_builder_append_string(json_builder_t *builder,
 		char escape[6] = {'\\', 'u', '0', '0', hex[byte >> 4], hex[byte & 0x0F]};
 		char const *short_escape = NULL;
 		switch (byte) {
-			case '"': short_escape = "\\\""; break;
-			case '\\': short_escape = "\\\\"; break;
-			case '\b': short_escape = "\\b"; break;
-			case '\f': short_escape = "\\f"; break;
-			case '\n': short_escape = "\\n"; break;
-			case '\r': short_escape = "\\r"; break;
-			case '\t': short_escape = "\\t"; break;
-			default: break;
+			case '"':
+				short_escape = "\\\"";
+				break;
+			case '\\':
+				short_escape = "\\\\";
+				break;
+			case '\b':
+				short_escape = "\\b";
+				break;
+			case '\f':
+				short_escape = "\\f";
+				break;
+			case '\n':
+				short_escape = "\\n";
+				break;
+			case '\r':
+				short_escape = "\\r";
+				break;
+			case '\t':
+				short_escape = "\\t";
+				break;
+			default:
+				break;
 		}
 		if (short_escape) {
 			if (!json_builder_append_n(builder, short_escape, 2))
@@ -163,8 +178,8 @@ static bool json_builder_append_string(json_builder_t *builder,
 }
 
 static bool json_builder_append_string_array(json_builder_t *builder,
-	                                         char **values,
-	                                         int count) {
+                                             char **values,
+                                             int count) {
 	if (count < 0 || (count > 0 && !values) ||
 	    !JSON_APPEND_LITERAL(builder, "[")) {
 		if (!builder->error)
@@ -185,7 +200,7 @@ static neurosdk_error_e json_schema_validate(char const *schema) {
 		return NeuroSDK_InvalidMessage;
 	json_parse_result_t result = {0};
 	json_value_t *value = json_parse_ex(schema, length, json_parse_flags_default,
-	                                  NULL, NULL, &result);
+	                                    NULL, NULL, &result);
 	if (!value)
 		return result.error == json_parse_error_allocator_failed
 		           ? NeuroSDK_OutOfMemory
@@ -196,20 +211,20 @@ static neurosdk_error_e json_schema_validate(char const *schema) {
 }
 
 neurosdk_error_e protocol_json_build_c2s(char const *game_name,
-	                                     neurosdk_message_t const *message,
-	                                     char **result) {
+                                         neurosdk_message_t const *message,
+                                         char **result) {
 	json_builder_t builder = {0};
 	*result = NULL;
 
-#define APPEND_LITERAL(literal)                       \
-	do {                                                 \
-		if (!JSON_APPEND_LITERAL(&builder, (literal)))      \
-			goto failure;                                      \
+#define APPEND_LITERAL(literal)                    \
+	do {                                             \
+		if (!JSON_APPEND_LITERAL(&builder, (literal))) \
+			goto failure;                                \
 	} while (0)
-#define APPEND_STRING(value)                         \
-	do {                                                 \
+#define APPEND_STRING(value)                            \
+	do {                                                  \
 		if (!json_builder_append_string(&builder, (value))) \
-			goto failure;                                      \
+			goto failure;                                     \
 	} while (0)
 
 	APPEND_LITERAL("{\"command\":");
@@ -281,7 +296,8 @@ neurosdk_error_e protocol_json_build_c2s(char const *game_name,
 				priority = "medium";
 			else if (message->value.actions_force.priority == NeuroSDK_Priority_High)
 				priority = "high";
-			else if (message->value.actions_force.priority == NeuroSDK_Priority_Critical)
+			else if (message->value.actions_force.priority ==
+			         NeuroSDK_Priority_Critical)
 				priority = "critical";
 			APPEND_LITERAL("\"actions/force\",\"game\":");
 			APPEND_STRING(game_name);

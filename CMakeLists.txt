@@ -55,6 +55,9 @@ set(SOURCES
 	${CMAKE_CURRENT_SOURCE_DIR}/src/ws_client.c
 	${CMAKE_CURRENT_SOURCE_DIR}/vendor/tinycthread.c
 )
+if(MSVC)
+	set_source_files_properties(vendor/tinycthread.c PROPERTIES COMPILE_OPTIONS /wd5105)
+endif()
 
 if(ENABLE_PERMESSAGE_DEFLATE)
 	# miniz.h includes miniz_zip.h even when archive APIs are disabled. Supply an

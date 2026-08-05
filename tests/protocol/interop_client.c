@@ -3,7 +3,14 @@
 #include <string.h>
 
 #ifdef _WIN32
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 5105)
+#endif
 #include <windows.h>
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 #else
 #include <unistd.h>
 #endif
@@ -22,9 +29,8 @@ static neurosdk_error_e register_actions(neurosdk_context_t *context) {
 	static neurosdk_action_t actions[] = {
 	    {.name = "echo_text",
 	     .description = "Echo text supplied by Neuro.",
-	     .json_schema =
-	         "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":"
-	         "\"string\"}},\"required\":[\"text\"]}"},
+	     .json_schema = "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":"
+	                    "\"string\"}},\"required\":[\"text\"]}"},
 	};
 	neurosdk_message_t message = {
 	    .kind = NeuroSDK_MessageKind_ActionsRegister,
@@ -46,7 +52,8 @@ int main(int argc, char **argv) {
 	neurosdk_context_t context = NULL;
 	neurosdk_error_e error = neurosdk_context_create(&context, &description);
 	if (error != NeuroSDK_None) {
-		fprintf(stderr, "context create failed: %s\n", neurosdk_error_string(error));
+		fprintf(stderr, "context create failed: %s\n",
+		        neurosdk_error_string(error));
 		return 1;
 	}
 
@@ -101,8 +108,8 @@ int main(int argc, char **argv) {
 
 	if (error == NeuroSDK_None && (!acknowledgement_seen || !action_seen))
 		error = NeuroSDK_InvalidMessage;
-	for (int attempt = 0;
-	     attempt < 100 && error == NeuroSDK_None && neurosdk_context_connected(&context);
+	for (int attempt = 0; attempt < 100 && error == NeuroSDK_None &&
+	                      neurosdk_context_connected(&context);
 	     attempt++) {
 		neurosdk_message_t *messages = NULL;
 		int count = 0;
@@ -113,7 +120,8 @@ int main(int argc, char **argv) {
 	}
 	neurosdk_context_destroy(&context);
 	if (error != NeuroSDK_None) {
-		fprintf(stderr, "protocol profile failed: %s\n", neurosdk_error_string(error));
+		fprintf(stderr, "protocol profile failed: %s\n",
+		        neurosdk_error_string(error));
 		return 1;
 	}
 	return 0;

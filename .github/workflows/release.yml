@@ -3,11 +3,8 @@ name: Release Build
 on:
   workflow_dispatch:
   push:
-    branches:
-      - "**"
     tags:
       - "v*"
-  pull_request:
 
 jobs:
   build-linux:

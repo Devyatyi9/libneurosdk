@@ -11,7 +11,7 @@
 bool protocol_json_validate_text(char const *json, size_t size);
 
 neurosdk_error_e protocol_json_build_c2s(char const *game_name,
-	                                     neurosdk_message_t const *message,
-	                                     char **result);
+                                         neurosdk_message_t const *message,
+                                         char **result);
 
 #endif

@@ -47,7 +47,7 @@ if ($LASTEXITCODE -ne 0 -or $version -notmatch "\b$([regex]::Escape($expectedVer
 
 $extensions = '\.(c|h|cc|cpp|cxx|hpp)$'
 $files = @(
-    git -C $root ls-files |
+    git -C $root ls-files --cached --others --exclude-standard |
         Where-Object {
             $_ -match $extensions -and
             $_ -notmatch '^vendor/' -and
@@ -55,10 +55,10 @@ $files = @(
         }
 )
 if ($LASTEXITCODE -ne 0) {
-    throw 'Unable to list tracked source files.'
+    throw 'Unable to list source files.'
 }
 if ($files.Count -eq 0) {
-    throw 'No tracked source files found.'
+    throw 'No source files found.'
 }
 
 foreach ($file in $files) {

@@ -45,8 +45,15 @@ jobs:
             cc: clang
             cxx: clang++
             sanitize: false
-          - name: Windows MSVC
+          - name: Windows MSVC x64
             os: windows-latest
+            arch: x64
+            cmake_platform: x64
+            sanitize: false
+          - name: Windows MSVC x86
+            os: windows-latest
+            arch: x86
+            cmake_platform: Win32
             sanitize: false
 
     runs-on: ${{ matrix.os }}
@@ -61,12 +68,14 @@ jobs:
     - name: Set up MSVC
       if: matrix.os == 'windows-latest'
       uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: ${{ matrix.arch }}
 
     - name: Configure CMake
       env:
         CC: ${{ matrix.cc || '' }}
         CXX: ${{ matrix.cxx || '' }}
-      run: cmake -B build -DNEURO_BUILD_TESTS=ON -DNEURO_BUILD_EXAMPLES=ON -DNEURO_WARNINGS_AS_ERRORS=ON ${{ matrix.sanitize && '-DNEURO_SANITIZE=ON' || '' }}
+      run: cmake -B build -DNEURO_BUILD_TESTS=ON -DNEURO_BUILD_EXAMPLES=ON -DNEURO_WARNINGS_AS_ERRORS=ON ${{ matrix.sanitize && '-DNEURO_SANITIZE=ON' || '' }} ${{ matrix.os == 'windows-latest' && format('-A {0}', matrix.cmake_platform) || '' }}
 
     - name: Build protocol tests
       run: cmake --build build --config Release --target protocol_test_suite
