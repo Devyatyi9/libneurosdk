@@ -1,4 +1,4 @@
-name: Test and Build WebSocket Layer
+name: Test WebSocket Layer
 
 on:
   workflow_dispatch:
