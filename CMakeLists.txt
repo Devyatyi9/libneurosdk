@@ -162,7 +162,17 @@ if(NEURO_BUILD_TESTS)
 		LIB_BUILD_HASH=${LIB_BUILD_HASH}
 	)
 	target_link_libraries(test_s2c_action PRIVATE ws_client_test)
-	add_custom_target(protocol_test_suite DEPENDS test_s2c_action)
+	add_executable(test_c2s_json tests/protocol/test_c2s_json.c)
+	target_include_directories(test_c2s_json PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/include
+		${CMAKE_CURRENT_SOURCE_DIR}/src
+		${CMAKE_CURRENT_SOURCE_DIR}/vendor
+		${CMAKE_CURRENT_SOURCE_DIR}/vendor/tinycthread/source)
+	target_compile_definitions(test_c2s_json PRIVATE
+		LIB_VERSION="${PROJECT_VERSION}"
+		LIB_BUILD_HASH="${LIB_BUILD_HASH}")
+	target_link_libraries(test_c2s_json PRIVATE ws_client_test)
+	add_custom_target(protocol_test_suite DEPENDS test_s2c_action test_c2s_json)
 
 	add_executable(echo_test tests/websocket/integration/echo_test.c)
 	target_link_libraries(echo_test PRIVATE ws_client_test)
