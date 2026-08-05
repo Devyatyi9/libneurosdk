@@ -87,7 +87,7 @@ int main(void) {
 	neurosdk_context_create_desc_t desc = {
 	    .url = NULL,
 	    .game_name = "TicTacToe",
-	    .poll_ms = 1000,
+	    .poll_ms = 100,
 	    .callback_log = NULL,
 #ifdef DEBUG
 	    .flags = NEUROSDK_CONTEXT_CREATE_FLAGS_DEBUG
@@ -149,6 +149,37 @@ int main(void) {
 		neurosdk_context_destroy(&ctx);
 		return 1;
 	}
+	// Flush startup, context and registration before blocking for console input.
+	// Repeat if the server requests compatibility re-registration during startup.
+	bool reregister_queued;
+	do {
+		neurosdk_message_t *initial_messages = NULL;
+		int initial_count = 0;
+		if ((err = neurosdk_context_poll(&ctx, &initial_messages,
+		                                 &initial_count)) != NeuroSDK_None) {
+			printf("Failed to flush initial messages: %s\n",
+			       neurosdk_error_string(err));
+			neurosdk_context_destroy(&ctx);
+			return 1;
+		}
+		reregister_queued = false;
+		for (int i = 0; i < initial_count; i++) {
+			if (initial_messages[i].kind ==
+			    NeuroSDK_MessageKind_ActionsReregisterAll) {
+				err = neurosdk_context_send(&ctx, &register_msg);
+				if (err != NeuroSDK_None) {
+					printf("Failed to re-register actions: %s\n",
+					       neurosdk_error_string(err));
+					for (int j = i; j < initial_count; j++)
+						neurosdk_message_destroy(&initial_messages[j]);
+					neurosdk_context_destroy(&ctx);
+					return 1;
+				}
+				reregister_queued = true;
+			}
+			neurosdk_message_destroy(&initial_messages[i]);
+		}
+	} while (reregister_queued);
 
 	char board[9] = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '};
 	int turn = 0;
@@ -192,7 +223,8 @@ int main(void) {
 			}
 
 			bool move_received = false;
-			while (!move_received) {
+			bool action_result_queued = false;
+			while (!move_received || action_result_queued) {
 				neurosdk_message_t *messages = NULL;
 				int count = 0;
 				if ((err = neurosdk_context_poll(&ctx, &messages, &count)) !=
@@ -200,6 +232,7 @@ int main(void) {
 					printf("Error polling messages: %s\n", neurosdk_error_string(err));
 					break;
 				}
+				action_result_queued = false;
 				for (int i = 0; i < count; i++) {
 					if (messages[i].kind == NeuroSDK_MessageKind_Action) {
 						char *data_str = messages[i].value.action.data;
@@ -221,6 +254,8 @@ int main(void) {
 							if (err == NeuroSDK_None)
 								move_received = true;
 						}
+						if (err == NeuroSDK_None)
+							action_result_queued = true;
 						if (err != NeuroSDK_None)
 							printf("Failed to send action result: %s\n",
 							       neurosdk_error_string(err));
