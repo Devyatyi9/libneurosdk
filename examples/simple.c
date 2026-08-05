@@ -80,8 +80,9 @@ int main(void) {
 	}
 	printf("Requested action execution.\n");
 
-	bool action_handled = false;
-	while (neurosdk_context_connected(&ctx) && !action_handled) {
+	bool action_result_queued = false;
+	bool action_result_flushed = false;
+	while (neurosdk_context_connected(&ctx) && !action_result_flushed) {
 		neurosdk_message_t *messages = NULL;
 		int count = 0;
 
@@ -90,6 +91,8 @@ int main(void) {
 			printf("Polling failed: %s\n", neurosdk_error_string(err));
 			break;
 		}
+		if (action_result_queued)
+			action_result_flushed = true;
 		if (count > 0) {
 			for (int i = 0; i < count; i++) {
 				if (messages[i].kind == NeuroSDK_MessageKind_StartupAcknowledgement) {
@@ -127,7 +130,7 @@ int main(void) {
 						return 1;
 					}
 					printf("Sent preemptive action result.\n");
-					action_handled = true;
+					action_result_queued = true;
 				}
 			}
 
