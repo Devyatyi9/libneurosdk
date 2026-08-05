@@ -2,7 +2,7 @@
 
 C SDK for interacting with the Neuro API.
 
-[![Test and Build WebSocket Layer](../../actions/workflows/websocket.yml/badge.svg?branch=master)](../../actions/workflows/websocket.yml?query=branch%3Amaster)  
+[![Test WebSocket Layer](../../actions/workflows/websocket.yml/badge.svg?branch=master)](../../actions/workflows/websocket.yml?query=branch%3Amaster)  
 [![Test Neuro Protocol](../../actions/workflows/protocol.yml/badge.svg?branch=master)](../../actions/workflows/protocol.yml?query=branch%3Amaster)
 
 ## Documentation
