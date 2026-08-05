@@ -37,8 +37,7 @@ static neurosdk_action_t play_action = {
     .json_schema =
         "{\"type\":\"object\",\"properties\":{\"choice\":{\"type\":\"string\","
         "\"enum\":[\"rock\",\"paper\",\"scissors\"]}},\"required\":[\"choice\"]"
-        ","
-        "\"additionalProperties\":false}",
+        "}",
 };
 
 static neurosdk_error_e register_play(neurosdk_context_t *context) {
