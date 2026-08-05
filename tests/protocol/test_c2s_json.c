@@ -2,7 +2,30 @@
 #include <stdlib.h>
 #include <string.h>
 
+static size_t allocation_count;
+static size_t allocation_to_fail;
+
+void *test_malloc(size_t size) {
+	allocation_count++;
+	return allocation_count == allocation_to_fail ? NULL : malloc(size);
+}
+
+void *test_realloc(void *memory, size_t size) {
+	allocation_count++;
+	return allocation_count == allocation_to_fail ? NULL : realloc(memory, size);
+}
+
+void test_free(void *memory) {
+	free(memory);
+}
+
+#define malloc test_malloc
+#define realloc test_realloc
+#define free test_free
 #include "../../src/neurosdk.c"
+#undef free
+#undef realloc
+#undef malloc
 
 static int failures;
 
@@ -274,6 +297,58 @@ static void test_utf8_semantic_round_trip(void) {
 	free(json);
 }
 
+static void test_empty_strings(void) {
+	context_t context = {.game_name = "game"};
+	neurosdk_message_t message = {.kind = NeuroSDK_MessageKind_Context,
+	                              .value.context = {.message = ""}};
+	check_json(&context, &message,
+	           "{\"command\":\"context\",\"game\":\"game\",\"data\":{"
+	           "\"message\":\"\",\"silent\":false}}");
+
+	neurosdk_action_t action = {
+	    .name = "", .description = "", .json_schema = "{}"};
+	message = (neurosdk_message_t){
+	    .kind = NeuroSDK_MessageKind_ActionsRegister,
+	    .value.actions_register = {.actions = &action, .actions_len = 1}};
+	check_json(&context, &message,
+	           "{\"command\":\"actions/register\",\"game\":\"game\","
+	           "\"data\":{\"actions\":[{\"name\":\"\",\"description\":\"\","
+	           "\"schema\":{}}]}}");
+
+	char *names[] = {""};
+	message =
+	    (neurosdk_message_t){.kind = NeuroSDK_MessageKind_ActionsUnregister,
+	                         .value.actions_unregister = {.action_names = names,
+	                                                      .action_names_len = 1}};
+	check_json(&context, &message,
+	           "{\"command\":\"actions/unregister\",\"game\":\"game\","
+	           "\"data\":{\"action_names\":[\"\"]}}");
+
+	message =
+	    (neurosdk_message_t){.kind = NeuroSDK_MessageKind_ActionsForce,
+	                         .value.actions_force = {.state = "",
+	                                                 .query = "",
+	                                                 .action_names = names,
+	                                                 .action_names_len = 1}};
+	check_json(&context, &message,
+	           "{\"command\":\"actions/force\",\"game\":\"game\",\"data\":{"
+	           "\"state\":\"\",\"query\":\"\",\"ephemeral_context\":false,"
+	           "\"action_names\":[\"\"],\"priority\":\"low\"}}");
+
+	message = (neurosdk_message_t){
+	    .kind = NeuroSDK_MessageKind_ActionResult,
+	    .value.action_result = {.id = "", .success = true, .message = ""}};
+	check_json(&context, &message,
+	           "{\"command\":\"action/result\",\"game\":\"game\",\"data\":{"
+	           "\"id\":\"\",\"success\":true,\"message\":\"\"}}");
+
+	neurosdk_context_t public_context = NULL;
+	neurosdk_context_create_desc_t description = {.game_name = ""};
+	CHECK(neurosdk_context_create(&public_context, &description) ==
+	      NeuroSDK_NoGameName);
+	CHECK(public_context == NULL);
+}
+
 static void test_size_limit(void) {
 	context_t context = {.game_name = "game"};
 	char *large = malloc(PROTOCOL_MESSAGE_MAX_SIZE);
@@ -290,11 +365,39 @@ static void test_size_limit(void) {
 	free(large);
 }
 
+static void test_allocation_failures(void) {
+	context_t context = {.game_name = "game"};
+	neurosdk_action_t action = {
+	    .name = "test", .description = "description", .json_schema = "{}"};
+	neurosdk_message_t message = {
+	    .kind = NeuroSDK_MessageKind_ActionsRegister,
+	    .value.actions_register = {.actions = &action, .actions_len = 1}};
+
+	bool reached_success = false;
+	for (size_t fail_at = 1; fail_at < 16; fail_at++) {
+		allocation_count = 0;
+		allocation_to_fail = fail_at;
+		char *json = NULL;
+		neurosdk_error_e result = build_c2s_json(&context, &message, &json);
+		if (result == NeuroSDK_None) {
+			reached_success = true;
+			free(json);
+			break;
+		}
+		CHECK(result == NeuroSDK_OutOfMemory);
+		CHECK(json == NULL);
+	}
+	CHECK(reached_success);
+	allocation_to_fail = 0;
+}
+
 int main(void) {
 	test_all_message_kinds();
 	test_utf8_and_validation();
 	test_utf8_semantic_round_trip();
+	test_empty_strings();
 	test_size_limit();
+	test_allocation_failures();
 	if (failures) {
 		fprintf(stderr, "%d C2S JSON test(s) failed\n", failures);
 		return 1;

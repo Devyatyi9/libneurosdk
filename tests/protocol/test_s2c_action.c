@@ -1,7 +1,31 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+static size_t allocation_count;
+static size_t allocation_to_fail;
+
+void *test_malloc(size_t size) {
+	allocation_count++;
+	return allocation_count == allocation_to_fail ? NULL : malloc(size);
+}
+
+void *test_realloc(void *memory, size_t size) {
+	allocation_count++;
+	return allocation_count == allocation_to_fail ? NULL : realloc(memory, size);
+}
+
+void test_free(void *memory) {
+	free(memory);
+}
+
+#define malloc test_malloc
+#define realloc test_realloc
+#define free test_free
 #include "../../src/neurosdk.c"
+#undef free
+#undef realloc
+#undef malloc
 
 static int failures;
 
@@ -389,6 +413,30 @@ static void test_queue_full(void) {
 	CHECK(context.message_queue_size == 0);
 }
 
+static void test_allocation_failures(void) {
+	static char const json[] =
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":"
+	    "\"jump\",\"data\":\"{}\"}}";
+	bool reached_success = false;
+	for (size_t fail_at = 1; fail_at < 16; fail_at++) {
+		allocation_count = 0;
+		allocation_to_fail = fail_at;
+		neurosdk_message_t message = {0};
+		context_t context = {0};
+		neurosdk_error_e result =
+		    parse_s2c_json(&context, &message, json, sizeof(json) - 1);
+		if (result == NeuroSDK_None) {
+			reached_success = true;
+			CHECK(neurosdk_message_destroy(&message) == NeuroSDK_None);
+			break;
+		}
+		CHECK(result == NeuroSDK_OutOfMemory);
+		CHECK(message.kind == NeuroSDK_MessageKind_Unknown);
+	}
+	CHECK(reached_success);
+	allocation_to_fail = 0;
+}
+
 static void test_message_size_limit(void) {
 	static char const prefix[] =
 	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":\"jump\"}}";
@@ -466,6 +514,7 @@ int main(void) {
 	test_invalid_unicode();
 	test_parse_is_transactional();
 	test_queue_full();
+	test_allocation_failures();
 	test_message_size_limit();
 	test_destroy_with_queued_action();
 

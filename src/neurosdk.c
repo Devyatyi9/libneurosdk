@@ -378,16 +378,20 @@ static bool json_builder_append_string_array(json_builder_t *builder,
 	return JSON_APPEND_LITERAL(builder, "]");
 }
 
-static bool json_schema_is_object(char const *schema) {
+static neurosdk_error_e json_schema_validate(char const *schema) {
 	size_t length = strlen(schema);
 	if (!json_utf8_valid((unsigned char const *)schema, length))
-		return false;
-	json_value_t *value = json_parse(schema, length);
+		return NeuroSDK_InvalidMessage;
+	json_parse_result_t result = {0};
+	json_value_t *value = json_parse_ex(schema, length, json_parse_flags_default,
+	                                    NULL, NULL, &result);
 	if (!value)
-		return false;
+		return result.error == json_parse_error_allocator_failed
+		           ? NeuroSDK_OutOfMemory
+		           : NeuroSDK_InvalidMessage;
 	bool is_object = value->type == json_type_object;
 	free(value);
-	return is_object;
+	return is_object ? NeuroSDK_None : NeuroSDK_InvalidMessage;
 }
 
 #if defined(_MSC_VER)
@@ -504,8 +508,12 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 
 	neurosdk_error_e res = NeuroSDK_None;
 	neurosdk_message_t parsed = {0};
-	json_value_t *root = json_parse(json, len);
+	json_parse_result_t parse_result = {0};
+	json_value_t *root = json_parse_ex(json, len, json_parse_flags_default, NULL,
+	                                   NULL, &parse_result);
 	if (!root) {
+		if (parse_result.error == json_parse_error_allocator_failed)
+			return NeuroSDK_OutOfMemory;
 		LOG_ERROR(ctx, "[parse_s2c_json] Could not parse message: invalid JSON.");
 		return NeuroSDK_InvalidJSON;
 	}
@@ -1117,8 +1125,13 @@ static neurosdk_error_e build_c2s_json(context_t const *context,
 				neurosdk_action_t const *action =
 				    &msg->value.actions_register.actions[i];
 				char const *schema = action->json_schema ? action->json_schema : "{}";
-				if (!action->name || !json_schema_is_object(schema))
+				if (!action->name)
 					goto invalid_message;
+				neurosdk_error_e schema_error = json_schema_validate(schema);
+				if (schema_error != NeuroSDK_None) {
+					builder.error = schema_error;
+					goto failure;
+				}
 				if (i)
 					APPEND_LITERAL(",");
 				APPEND_LITERAL("{\"name\":");
