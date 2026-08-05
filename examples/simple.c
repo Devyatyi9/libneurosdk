@@ -20,6 +20,14 @@
 
 #define GAME_NAME "TestGame"
 
+static neurosdk_error_e register_action(neurosdk_context_t *ctx,
+                                        neurosdk_action_t *action) {
+	neurosdk_message_t reg_msg = {.kind = NeuroSDK_MessageKind_ActionsRegister};
+	reg_msg.value.actions_register.actions = action;
+	reg_msg.value.actions_register.actions_len = 1;
+	return neurosdk_context_send(ctx, &reg_msg);
+}
+
 int main(void) {
 	neurosdk_context_t ctx;
 	neurosdk_context_create_desc_t desc = {
@@ -51,11 +59,7 @@ int main(void) {
 	                            .description = "Pick a username",
 	                            .json_schema = "{}"};
 
-	neurosdk_message_t reg_msg = {.kind = NeuroSDK_MessageKind_ActionsRegister};
-	reg_msg.value.actions_register.actions = &action;
-	reg_msg.value.actions_register.actions_len = 1;
-
-	err = neurosdk_context_send(&ctx, &reg_msg);
+	err = register_action(&ctx, &action);
 	if (err != NeuroSDK_None) {
 		printf("Failed to register action: %s\n", neurosdk_error_string(err));
 		neurosdk_context_destroy(&ctx);
@@ -78,14 +82,31 @@ int main(void) {
 	}
 	printf("Requested action execution.\n");
 
-	while (neurosdk_context_connected(&ctx)) {
+	bool action_handled = false;
+	while (neurosdk_context_connected(&ctx) && !action_handled) {
 		neurosdk_message_t *messages = NULL;
 		int count = 0;
 
 		err = neurosdk_context_poll(&ctx, &messages, &count);
-		if (err == NeuroSDK_None && count > 0) {
+		if (err != NeuroSDK_None) {
+			printf("Polling failed: %s\n", neurosdk_error_string(err));
+			break;
+		}
+		if (count > 0) {
 			for (int i = 0; i < count; i++) {
-				if (messages[i].kind == NeuroSDK_MessageKind_Action) {
+				if (messages[i].kind == NeuroSDK_MessageKind_StartupAcknowledgement) {
+					printf("Startup acknowledged for %s.\n",
+					       messages[i].value.startup_acknowledgement.display_name);
+				} else if (messages[i].kind ==
+				           NeuroSDK_MessageKind_ActionsReregisterAll) {
+					err = register_action(&ctx, &action);
+					if (err != NeuroSDK_None) {
+						printf("Failed to re-register action: %s\n",
+						       neurosdk_error_string(err));
+						break;
+					}
+					printf("Re-registered action.\n");
+				} else if (messages[i].kind == NeuroSDK_MessageKind_Action) {
 					printf("- ID: %s\n", messages[i].value.action.id);
 					printf("- Name: %s\n", messages[i].value.action.name);
 					printf("- Data: %s\n", messages[i].value.action.data
@@ -108,14 +129,13 @@ int main(void) {
 						return 1;
 					}
 					printf("Sent preemptive action result.\n");
+					action_handled = true;
 				}
 			}
 
 			for (int i = 0; i < count; i++) {
 				neurosdk_message_destroy(&messages[i]);
 			}
-
-			break;
 		}
 		usleep(500000);
 	}
