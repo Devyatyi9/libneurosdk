@@ -22,7 +22,7 @@ void test_free(void *memory) {
 #define malloc test_malloc
 #define realloc test_realloc
 #define free test_free
-#include "../../src/neurosdk.c"
+#include "../../src/protocol_json.c"
 #undef free
 #undef realloc
 #undef malloc
@@ -59,10 +59,10 @@ static void check_string_value(json_value_t *value, char const *expected) {
 	CHECK(memcmp(string->string, expected, string->string_size) == 0);
 }
 
-static json_value_t *build_and_parse(context_t const *context,
+static json_value_t *build_and_parse(char const *game_name,
                                      neurosdk_message_t const *message,
                                      char **json) {
-	CHECK(build_c2s_json(context, message, json) == NeuroSDK_None);
+	CHECK(protocol_json_build_c2s(game_name, message, json) == NeuroSDK_None);
 	if (!*json)
 		return NULL;
 	json_value_t *root = json_parse(*json, strlen(*json));
@@ -71,11 +71,11 @@ static json_value_t *build_and_parse(context_t const *context,
 	return root;
 }
 
-static void check_json(context_t const *context,
+static void check_json(char const *game_name,
                        neurosdk_message_t const *message,
                        char const *expected) {
 	char *json = NULL;
-	CHECK(build_c2s_json(context, message, &json) == NeuroSDK_None);
+	CHECK(protocol_json_build_c2s(game_name, message, &json) == NeuroSDK_None);
 	CHECK(json != NULL);
 	if (json) {
 		if (strcmp(json, expected) != 0)
@@ -89,15 +89,15 @@ static void check_json(context_t const *context,
 }
 
 static void test_all_message_kinds(void) {
-	context_t context = {.game_name = "game\"\\\n"};
+	char const *game_name = "game\"\\\n";
 	neurosdk_message_t message = {.kind = NeuroSDK_MessageKind_Startup};
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"startup\",\"game\":\"game\\\"\\\\\\n\"}");
 
 	message = (neurosdk_message_t){
 	    .kind = NeuroSDK_MessageKind_Context,
 	    .value.context = {.message = "\b\f\r\t\1", .silent = true}};
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"context\",\"game\":\"game\\\"\\\\\\n\","
 	           "\"data\":{\"message\":\"\\b\\f\\r\\t\\u0001\","
 	           "\"silent\":true}}");
@@ -111,7 +111,7 @@ static void test_all_message_kinds(void) {
 	message = (neurosdk_message_t){
 	    .kind = NeuroSDK_MessageKind_ActionsRegister,
 	    .value.actions_register = {.actions = actions, .actions_len = 2}};
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"actions/register\",\"game\":\"game\\\"\\\\\\n\","
 	           "\"data\":{\"actions\":[{\"name\":\"jump\\\"\","
 	           "\"description\":\"\",\"schema\":{}},{\"name\":\"look\","
@@ -123,7 +123,7 @@ static void test_all_message_kinds(void) {
 	    (neurosdk_message_t){.kind = NeuroSDK_MessageKind_ActionsUnregister,
 	                         .value.actions_unregister = {.action_names = names,
 	                                                      .action_names_len = 2}};
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"actions/unregister\",\"game\":\"game\\\"\\\\\\n\","
 	           "\"data\":{\"action_names\":[\"one\\\"\",\"two\\\\\"]}}");
 
@@ -135,7 +135,7 @@ static void test_all_message_kinds(void) {
 	                            .action_names = names,
 	                            .action_names_len = 2,
 	                            .priority = NeuroSDK_Priority_Critical}};
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"actions/force\",\"game\":\"game\\\"\\\\\\n\","
 	           "\"data\":{\"state\":null,\"query\":\"why\\\"?\","
 	           "\"ephemeral_context\":true,\"action_names\":[\"one\\\"\","
@@ -143,7 +143,7 @@ static void test_all_message_kinds(void) {
 	message.value.actions_force.state = "ready\nnow";
 	message.value.actions_force.ephemeral_context = false;
 	message.value.actions_force.priority = NeuroSDK_Priority_Medium;
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"actions/force\",\"game\":\"game\\\"\\\\\\n\","
 	           "\"data\":{\"state\":\"ready\\nnow\",\"query\":\"why\\\"?\","
 	           "\"ephemeral_context\":false,\"action_names\":[\"one\\\"\","
@@ -152,13 +152,13 @@ static void test_all_message_kinds(void) {
 	message = (neurosdk_message_t){
 	    .kind = NeuroSDK_MessageKind_ActionResult,
 	    .value.action_result = {.id = "id\"", .success = false, .message = NULL}};
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"action/result\",\"game\":\"game\\\"\\\\\\n\","
 	           "\"data\":{\"id\":\"id\\\"\",\"success\":false,"
 	           "\"message\":null}}");
 	message.value.action_result.message = "done\\\n";
 	message.value.action_result.success = true;
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"action/result\",\"game\":\"game\\\"\\\\\\n\","
 	           "\"data\":{\"id\":\"id\\\"\",\"success\":true,"
 	           "\"message\":\"done\\\\\\n\"}}");
@@ -166,7 +166,7 @@ static void test_all_message_kinds(void) {
 
 static void test_utf8_and_validation(void) {
 	static char const utf8[] = "\320\277\321\200\320\270\320\262\320\265\321\202";
-	context_t context = {.game_name = utf8};
+	char const *game_name = utf8;
 	neurosdk_message_t message = {.kind = NeuroSDK_MessageKind_Context,
 	                              .value.context = {.message = (char *)utf8}};
 	char expected[256];
@@ -174,41 +174,46 @@ static void test_utf8_and_validation(void) {
 	         "{\"command\":\"context\",\"game\":\"%s\",\"data\":{"
 	         "\"message\":\"%s\",\"silent\":false}}",
 	         utf8, utf8);
-	check_json(&context, &message, expected);
+	check_json(game_name, &message, expected);
 
 	unsigned char invalid_utf8[] = {0xC0, 0xAF, '\0'};
 	message.value.context.message = (char *)invalid_utf8;
 	char *json = NULL;
-	CHECK(build_c2s_json(&context, &message, &json) == NeuroSDK_InvalidMessage);
+	CHECK(protocol_json_build_c2s(game_name, &message, &json) ==
+	      NeuroSDK_InvalidMessage);
 	CHECK(json == NULL);
 
 	neurosdk_action_t action = {.name = "test", .json_schema = "[]"};
 	message = (neurosdk_message_t){
 	    .kind = NeuroSDK_MessageKind_ActionsRegister,
 	    .value.actions_register = {.actions = &action, .actions_len = 1}};
-	CHECK(build_c2s_json(&context, &message, &json) == NeuroSDK_InvalidMessage);
+	CHECK(protocol_json_build_c2s(game_name, &message, &json) ==
+	      NeuroSDK_InvalidMessage);
 	action.json_schema = "{\"broken\":}";
-	CHECK(build_c2s_json(&context, &message, &json) == NeuroSDK_InvalidMessage);
+	CHECK(protocol_json_build_c2s(game_name, &message, &json) ==
+	      NeuroSDK_InvalidMessage);
 	action.json_schema = "{\"type\":\"object\"} trailing";
-	CHECK(build_c2s_json(&context, &message, &json) == NeuroSDK_InvalidMessage);
+	CHECK(protocol_json_build_c2s(game_name, &message, &json) ==
+	      NeuroSDK_InvalidMessage);
 
 	char *names[] = {NULL};
 	message =
 	    (neurosdk_message_t){.kind = NeuroSDK_MessageKind_ActionsUnregister,
 	                         .value.actions_unregister = {.action_names = names,
 	                                                      .action_names_len = 1}};
-	CHECK(build_c2s_json(&context, &message, &json) == NeuroSDK_InvalidMessage);
+	CHECK(protocol_json_build_c2s(game_name, &message, &json) ==
+	      NeuroSDK_InvalidMessage);
 }
 
 static void test_utf8_semantic_round_trip(void) {
 	static char utf8[] =
 	    "\302\242 \342\202\254 \360\237\224\245 \344\270\255\346\226\207";
-	context_t context = {.game_name = utf8};
+	char const *game_name = utf8;
 	char *json = NULL;
 
 	neurosdk_message_t message = {.kind = NeuroSDK_MessageKind_Context,
 	                              .value.context = {.message = utf8}};
-	json_value_t *root = build_and_parse(&context, &message, &json);
+	json_value_t *root = build_and_parse(game_name, &message, &json);
 	if (root) {
 		json_object_t *root_object = (json_object_t *)root->payload;
 		check_string_value(object_get(root_object, "game"), utf8);
@@ -228,7 +233,7 @@ static void test_utf8_semantic_round_trip(void) {
 	    .kind = NeuroSDK_MessageKind_ActionsRegister,
 	    .value.actions_register = {.actions = &action, .actions_len = 1}};
 	json = NULL;
-	root = build_and_parse(&context, &message, &json);
+	root = build_and_parse(game_name, &message, &json);
 	if (root) {
 		json_value_t *data = object_get((json_object_t *)root->payload, "data");
 		json_value_t *actions =
@@ -258,7 +263,7 @@ static void test_utf8_semantic_round_trip(void) {
 	                                                 .action_names = names,
 	                                                 .action_names_len = 1}};
 	json = NULL;
-	root = build_and_parse(&context, &message, &json);
+	root = build_and_parse(game_name, &message, &json);
 	if (root) {
 		json_value_t *data = object_get((json_object_t *)root->payload, "data");
 		CHECK(data && data->type == json_type_object);
@@ -283,7 +288,7 @@ static void test_utf8_semantic_round_trip(void) {
 	    .kind = NeuroSDK_MessageKind_ActionResult,
 	    .value.action_result = {.id = utf8, .success = true, .message = utf8}};
 	json = NULL;
-	root = build_and_parse(&context, &message, &json);
+	root = build_and_parse(game_name, &message, &json);
 	if (root) {
 		json_value_t *data = object_get((json_object_t *)root->payload, "data");
 		CHECK(data && data->type == json_type_object);
@@ -298,10 +303,10 @@ static void test_utf8_semantic_round_trip(void) {
 }
 
 static void test_empty_strings(void) {
-	context_t context = {.game_name = "game"};
+	char const *game_name = "game";
 	neurosdk_message_t message = {.kind = NeuroSDK_MessageKind_Context,
 	                              .value.context = {.message = ""}};
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"context\",\"game\":\"game\",\"data\":{"
 	           "\"message\":\"\",\"silent\":false}}");
 
@@ -310,7 +315,7 @@ static void test_empty_strings(void) {
 	message = (neurosdk_message_t){
 	    .kind = NeuroSDK_MessageKind_ActionsRegister,
 	    .value.actions_register = {.actions = &action, .actions_len = 1}};
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"actions/register\",\"game\":\"game\","
 	           "\"data\":{\"actions\":[{\"name\":\"\",\"description\":\"\","
 	           "\"schema\":{}}]}}");
@@ -320,7 +325,7 @@ static void test_empty_strings(void) {
 	    (neurosdk_message_t){.kind = NeuroSDK_MessageKind_ActionsUnregister,
 	                         .value.actions_unregister = {.action_names = names,
 	                                                      .action_names_len = 1}};
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"actions/unregister\",\"game\":\"game\","
 	           "\"data\":{\"action_names\":[\"\"]}}");
 
@@ -330,7 +335,7 @@ static void test_empty_strings(void) {
 	                                                 .query = "",
 	                                                 .action_names = names,
 	                                                 .action_names_len = 1}};
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"actions/force\",\"game\":\"game\",\"data\":{"
 	           "\"state\":\"\",\"query\":\"\",\"ephemeral_context\":false,"
 	           "\"action_names\":[\"\"],\"priority\":\"low\"}}");
@@ -338,19 +343,13 @@ static void test_empty_strings(void) {
 	message = (neurosdk_message_t){
 	    .kind = NeuroSDK_MessageKind_ActionResult,
 	    .value.action_result = {.id = "", .success = true, .message = ""}};
-	check_json(&context, &message,
+	check_json(game_name, &message,
 	           "{\"command\":\"action/result\",\"game\":\"game\",\"data\":{"
 	           "\"id\":\"\",\"success\":true,\"message\":\"\"}}");
-
-	neurosdk_context_t public_context = NULL;
-	neurosdk_context_create_desc_t description = {.game_name = ""};
-	CHECK(neurosdk_context_create(&public_context, &description) ==
-	      NeuroSDK_NoGameName);
-	CHECK(public_context == NULL);
 }
 
 static void test_size_limit(void) {
-	context_t context = {.game_name = "game"};
+	char const *game_name = "game";
 	char *large = malloc(PROTOCOL_MESSAGE_MAX_SIZE);
 	CHECK(large != NULL);
 	if (!large)
@@ -360,13 +359,14 @@ static void test_size_limit(void) {
 	neurosdk_message_t message = {.kind = NeuroSDK_MessageKind_Context,
 	                              .value.context = {.message = large}};
 	char *json = NULL;
-	CHECK(build_c2s_json(&context, &message, &json) == NeuroSDK_InvalidMessage);
+	CHECK(protocol_json_build_c2s(game_name, &message, &json) ==
+	      NeuroSDK_InvalidMessage);
 	CHECK(json == NULL);
 	free(large);
 }
 
 static void test_allocation_failures(void) {
-	context_t context = {.game_name = "game"};
+	char const *game_name = "game";
 	neurosdk_action_t action = {
 	    .name = "test", .description = "description", .json_schema = "{}"};
 	neurosdk_message_t message = {
@@ -378,7 +378,8 @@ static void test_allocation_failures(void) {
 		allocation_count = 0;
 		allocation_to_fail = fail_at;
 		char *json = NULL;
-		neurosdk_error_e result = build_c2s_json(&context, &message, &json);
+		neurosdk_error_e result =
+		    protocol_json_build_c2s(game_name, &message, &json);
 		if (result == NeuroSDK_None) {
 			reached_success = true;
 			free(json);

@@ -51,7 +51,9 @@ endif()
 
 set(SOURCES
 	${CMAKE_CURRENT_SOURCE_DIR}/src/neurosdk.c
+	${CMAKE_CURRENT_SOURCE_DIR}/src/protocol_json.c
 	${CMAKE_CURRENT_SOURCE_DIR}/src/ws_client.c
+	${CMAKE_CURRENT_SOURCE_DIR}/vendor/tinycthread.c
 )
 
 if(ENABLE_PERMESSAGE_DEFLATE)
@@ -151,7 +153,11 @@ if(NEURO_BUILD_TESTS)
 		target_link_libraries(ws_client_test PUBLIC ws2_32 bcrypt)
 	endif()
 
-	add_executable(test_s2c_action tests/protocol/test_s2c_action.c)
+	add_executable(test_s2c_action
+		tests/protocol/test_s2c_action.c
+		src/protocol_json.c
+		vendor/tinycthread.c
+	)
 	target_include_directories(test_s2c_action PRIVATE
 		${CMAKE_CURRENT_SOURCE_DIR}/include
 		${CMAKE_CURRENT_SOURCE_DIR}/vendor
@@ -172,7 +178,10 @@ if(NEURO_BUILD_TESTS)
 		LIB_VERSION="${PROJECT_VERSION}"
 		LIB_BUILD_HASH="${LIB_BUILD_HASH}")
 	target_link_libraries(test_c2s_json PRIVATE ws_client_test)
-	add_custom_target(protocol_test_suite DEPENDS test_s2c_action test_c2s_json)
+	add_executable(protocol_interop_client tests/protocol/interop_client.c)
+	target_link_libraries(protocol_interop_client PRIVATE ${PROJECT_NAME})
+	add_custom_target(protocol_test_suite DEPENDS
+		test_s2c_action test_c2s_json protocol_interop_client)
 
 	add_executable(echo_test tests/websocket/integration/echo_test.c)
 	target_link_libraries(echo_test PRIVATE ws_client_test)
@@ -235,6 +244,10 @@ if(NEURO_BUILD_EXAMPLES)
 	add_executable(reconnect_example examples/reconnect.c)
 	target_include_directories(reconnect_example PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 	target_link_libraries(reconnect_example PRIVATE ${PROJECT_NAME})
+	if(TARGET protocol_test_suite)
+		add_dependencies(protocol_test_suite
+			simple_example tictactoe_example reconnect_example)
+	endif()
 endif()
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/neurosdk.pc
