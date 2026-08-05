@@ -27,6 +27,7 @@
 #endif
 #endif
 
+#define JSON_MAX_RECURSION 64
 #include <json.h>
 #include "ws_client.h"
 
@@ -235,6 +236,31 @@ static bool json_utf8_valid(unsigned char const *data, size_t size) {
 		i += continuation_count;
 	}
 	return true;
+}
+
+static bool json_text_has_raw_string_control(char const *json, size_t size) {
+	bool in_string = false;
+	bool escaped = false;
+	for (size_t i = 0; i < size; i++) {
+		unsigned char byte = (unsigned char)json[i];
+		if (!in_string) {
+			if (byte == '"')
+				in_string = true;
+			continue;
+		}
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (byte == '\\') {
+			escaped = true;
+		} else if (byte == '"') {
+			in_string = false;
+		} else if (byte < 0x20) {
+			return true;
+		}
+	}
+	return false;
 }
 
 static bool json_builder_reserve(json_builder_t *builder, size_t additional) {
@@ -467,6 +493,12 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 	}
 	if (!json || len == 0) {
 		LOG_ERROR(ctx, "[parse_s2c_json] Provided JSON is empty or null.");
+		return NeuroSDK_InvalidJSON;
+	}
+	if (!json_utf8_valid((unsigned char const *)json, len) ||
+	    json_text_has_raw_string_control(json, len)) {
+		LOG_ERROR(ctx,
+		          "[parse_s2c_json] Provided JSON is not valid UTF-8 JSON text.");
 		return NeuroSDK_InvalidJSON;
 	}
 

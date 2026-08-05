@@ -79,6 +79,22 @@ static void test_utf8_action(void) {
 	CHECK(neurosdk_message_destroy(&queue[0]) == NeuroSDK_None);
 }
 
+static void test_unicode_action(void) {
+	static char const expected_name[] =
+	    "\344\270\255\346\226\207 \360\237\224\245";
+	neurosdk_message_t queue[1] = {0};
+	context_t context = make_context(queue, 1);
+
+	receive(&context,
+	        "{\"command\":\"action\",\"data\":{\"id\":\"unicode\","
+	        "\"name\":\"\\u4E2D\\u6587 \\uD83D\\uDD25\",\"data\":null}}");
+
+	CHECK(context.conn_err == NeuroSDK_None);
+	CHECK(context.message_queue_size == 1);
+	CHECK(strcmp(queue[0].value.action.name, expected_name) == 0);
+	CHECK(neurosdk_message_destroy(&queue[0]) == NeuroSDK_None);
+}
+
 static void test_startup_acknowledgement(void) {
 	neurosdk_message_t queue[1] = {0};
 	context_t context = make_context(queue, 1);
@@ -198,9 +214,57 @@ static void test_duplicate_fields(void) {
 
 static void test_error_classification(void) {
 	test_invalid_action("{", NeuroSDK_InvalidJSON);
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":"
+	    "\"jump\"}} trailing",
+	    NeuroSDK_InvalidJSON);
 	test_invalid_action("[]", NeuroSDK_InvalidMessage);
 	test_invalid_action("{\"command\":\"future/command\"}",
 	                    NeuroSDK_UnknownCommand);
+}
+
+static char *make_nested_action(size_t depth) {
+	static char const prefix[] = "{\"command\":\"action\",\"extra\":";
+	static char const suffix[] = ",\"data\":{\"id\":\"42\",\"name\":\"jump\"}}";
+	if (depth > (SIZE_MAX - sizeof(prefix) - sizeof(suffix)) / 2)
+		return NULL;
+	size_t size = sizeof(prefix) - 1 + depth * 2 + sizeof(suffix);
+	char *json = malloc(size);
+	if (!json)
+		return NULL;
+	char *cursor = json;
+	memcpy(cursor, prefix, sizeof(prefix) - 1);
+	cursor += sizeof(prefix) - 1;
+	memset(cursor, '[', depth);
+	cursor += depth;
+	memset(cursor, ']', depth);
+	cursor += depth;
+	memcpy(cursor, suffix, sizeof(suffix));
+	return json;
+}
+
+static void test_depth_limit(void) {
+	char *json = make_nested_action(16);
+	CHECK(json != NULL);
+	if (!json)
+		return;
+	neurosdk_message_t queue[1] = {0};
+	context_t context = make_context(queue, 1);
+	receive(&context, json);
+	CHECK(context.conn_err == NeuroSDK_None);
+	CHECK(context.message_queue_size == 1);
+	CHECK(neurosdk_message_destroy(&queue[0]) == NeuroSDK_None);
+	free(json);
+
+	json = make_nested_action(JSON_MAX_RECURSION + 1);
+	CHECK(json != NULL);
+	if (!json)
+		return;
+	context = make_context(queue, 1);
+	receive(&context, json);
+	CHECK(context.conn_err == NeuroSDK_InvalidJSON);
+	CHECK(context.message_queue_size == 0);
+	free(json);
 }
 
 static void test_invalid_startup_messages(void) {
@@ -247,6 +311,38 @@ static void test_raw_nul(void) {
 
 	receive_n(&context, json, sizeof(json) - 1);
 
+	CHECK(context.conn_err == NeuroSDK_InvalidJSON);
+	CHECK(context.message_queue_size == 0);
+}
+
+static void test_invalid_unicode(void) {
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":"
+	    "\"\\uD800\"}}",
+	    NeuroSDK_InvalidJSON);
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":"
+	    "\"\\uDC00\"}}",
+	    NeuroSDK_InvalidJSON);
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":"
+	    "\"\\uD800\\u0041\"}}",
+	    NeuroSDK_InvalidJSON);
+
+	static char const malformed_utf8[] =
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":\""
+	    "\300\257\"}}";
+	neurosdk_message_t queue[1] = {0};
+	context_t context = make_context(queue, 1);
+	receive_n(&context, malformed_utf8, sizeof(malformed_utf8) - 1);
+	CHECK(context.conn_err == NeuroSDK_InvalidJSON);
+	CHECK(context.message_queue_size == 0);
+
+	static char const raw_control[] =
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":\"bad"
+	    "\1value\"}}";
+	context = make_context(queue, 1);
+	receive_n(&context, raw_control, sizeof(raw_control) - 1);
 	CHECK(context.conn_err == NeuroSDK_InvalidJSON);
 	CHECK(context.message_queue_size == 0);
 }
@@ -357,14 +453,17 @@ int main(void) {
 	test_valid_action();
 	test_null_action_data();
 	test_utf8_action();
+	test_unicode_action();
 	test_startup_acknowledgement();
 	test_reregister_all();
 	test_invalid_actions();
 	test_duplicate_fields();
 	test_error_classification();
+	test_depth_limit();
 	test_invalid_startup_messages();
 	test_invalid_reregister_all();
 	test_raw_nul();
+	test_invalid_unicode();
 	test_parse_is_transactional();
 	test_queue_full();
 	test_message_size_limit();
