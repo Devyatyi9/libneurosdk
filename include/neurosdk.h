@@ -82,7 +82,10 @@ typedef enum neurosdk_message_kind {
 	NeuroSDK_MessageKind_ActionsForce,
 	NeuroSDK_MessageKind_ActionResult,
 	// Server to Client (S2C)
-	NeuroSDK_MessageKind_Action
+	NeuroSDK_MessageKind_Action,
+	NeuroSDK_MessageKind_StartupAcknowledgement,
+	// Optional compatibility message proposed by the Neuro API.
+	NeuroSDK_MessageKind_ActionsReregisterAll
 } neurosdk_message_kind_e;
 
 // Callbacks
@@ -143,6 +146,13 @@ typedef struct neurosdk_message_action {
 	char *data;
 } neurosdk_message_action_t;
 
+// Startup Acknowledgement
+typedef struct neurosdk_message_startup_acknowledgement {
+	char *session_id;
+	char *character_id;
+	char *display_name;
+} neurosdk_message_startup_acknowledgement_t;
+
 // General Message Structure
 typedef struct neurosdk_message {
 	neurosdk_message_kind_e kind;
@@ -153,6 +163,7 @@ typedef struct neurosdk_message {
 		neurosdk_message_actions_force_t actions_force;
 		neurosdk_message_action_result_t action_result;
 		neurosdk_message_action_t action;
+		neurosdk_message_startup_acknowledgement_t startup_acknowledgement;
 	} value;
 } neurosdk_message_t;
 

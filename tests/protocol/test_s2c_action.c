@@ -79,6 +79,41 @@ static void test_utf8_action(void) {
 	CHECK(neurosdk_message_destroy(&queue[0]) == NeuroSDK_None);
 }
 
+static void test_startup_acknowledgement(void) {
+	neurosdk_message_t queue[1] = {0};
+	context_t context = make_context(queue, 1);
+
+	receive(&context,
+	        "{\"command\":\"startup\",\"data\":{\"session\":{"
+	        "\"sessionId\":\"session-42\",\"characterId\":\"neuro\","
+	        "\"displayName\":\"Neuro-sama\"}}}");
+
+	CHECK(context.conn_err == NeuroSDK_None);
+	CHECK(context.message_queue_size == 1);
+	CHECK(queue[0].kind == NeuroSDK_MessageKind_StartupAcknowledgement);
+	CHECK(strcmp(queue[0].value.startup_acknowledgement.session_id,
+	             "session-42") == 0);
+	CHECK(strcmp(queue[0].value.startup_acknowledgement.character_id, "neuro") ==
+	      0);
+	CHECK(strcmp(queue[0].value.startup_acknowledgement.display_name,
+	             "Neuro-sama") == 0);
+	CHECK(neurosdk_message_destroy(&queue[0]) == NeuroSDK_None);
+	CHECK(queue[0].kind == NeuroSDK_MessageKind_Unknown);
+}
+
+static void test_reregister_all(void) {
+	neurosdk_message_t queue[1] = {0};
+	context_t context = make_context(queue, 1);
+
+	receive(&context, "{\"command\":\"actions/reregister_all\"}");
+
+	CHECK(context.conn_err == NeuroSDK_None);
+	CHECK(context.message_queue_size == 1);
+	CHECK(queue[0].kind == NeuroSDK_MessageKind_ActionsReregisterAll);
+	CHECK(neurosdk_message_destroy(&queue[0]) == NeuroSDK_None);
+	CHECK(queue[0].kind == NeuroSDK_MessageKind_Unknown);
+}
+
 static void test_invalid_action(char const *json,
                                 neurosdk_error_e expected_error) {
 	neurosdk_message_t queue[1] = {0};
@@ -166,6 +201,42 @@ static void test_error_classification(void) {
 	test_invalid_action("[]", NeuroSDK_InvalidMessage);
 	test_invalid_action("{\"command\":\"future/command\"}",
 	                    NeuroSDK_UnknownCommand);
+}
+
+static void test_invalid_startup_messages(void) {
+	test_invalid_action("{\"command\":\"startup\"}", NeuroSDK_InvalidMessage);
+	test_invalid_action("{\"command\":\"startup\",\"data\":null}",
+	                    NeuroSDK_InvalidMessage);
+	test_invalid_action("{\"command\":\"startup\",\"data\":{}}",
+	                    NeuroSDK_InvalidMessage);
+	test_invalid_action("{\"command\":\"startup\",\"data\":{\"session\":null}}",
+	                    NeuroSDK_InvalidMessage);
+	test_invalid_action(
+	    "{\"command\":\"startup\",\"data\":{\"session\":{},\"session\":{}}}",
+	    NeuroSDK_InvalidMessage);
+	test_invalid_action(
+	    "{\"command\":\"startup\",\"data\":{\"session\":{\"sessionId\":\"s\","
+	    "\"characterId\":\"neuro\"}}}",
+	    NeuroSDK_InvalidMessage);
+	test_invalid_action(
+	    "{\"command\":\"startup\",\"data\":{\"session\":{\"sessionId\":\"s\","
+	    "\"sessionId\":\"again\",\"characterId\":\"neuro\","
+	    "\"displayName\":\"Neuro-sama\"}}}",
+	    NeuroSDK_InvalidMessage);
+	test_invalid_action(
+	    "{\"command\":\"startup\",\"data\":{\"session\":{\"sessionId\":\"s\","
+	    "\"characterId\":\"neuro\\u0000hidden\","
+	    "\"displayName\":\"Neuro-sama\"}}}",
+	    NeuroSDK_InvalidMessage);
+	test_invalid_action(
+	    "{\"command\":\"startup\",\"data\":{\"session\":{\"sessionId\":\"s\","
+	    "\"characterId\":\"neuro\",\"displayName\":42}}}",
+	    NeuroSDK_InvalidMessage);
+}
+
+static void test_invalid_reregister_all(void) {
+	test_invalid_action("{\"command\":\"actions/reregister_all\",\"data\":null}",
+	                    NeuroSDK_InvalidMessage);
 }
 
 static void test_raw_nul(void) {
@@ -286,9 +357,13 @@ int main(void) {
 	test_valid_action();
 	test_null_action_data();
 	test_utf8_action();
+	test_startup_acknowledgement();
+	test_reregister_all();
 	test_invalid_actions();
 	test_duplicate_fields();
 	test_error_classification();
+	test_invalid_startup_messages();
+	test_invalid_reregister_all();
 	test_raw_nul();
 	test_parse_is_transactional();
 	test_queue_full();

@@ -330,6 +330,10 @@ static void message_cleanup(neurosdk_message_t *msg) {
 		free(msg->value.action.id);
 		free(msg->value.action.name);
 		free(msg->value.action.data);
+	} else if (msg->kind == NeuroSDK_MessageKind_StartupAcknowledgement) {
+		free(msg->value.startup_acknowledgement.session_id);
+		free(msg->value.startup_acknowledgement.character_id);
+		free(msg->value.startup_acknowledgement.display_name);
 	}
 	memset(msg, 0, sizeof(*msg));
 }
@@ -388,6 +392,10 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 
 			if (JSON_STRING_EQUALS(value_str, "action")) {
 				kind = NeuroSDK_MessageKind_Action;
+			} else if (JSON_STRING_EQUALS(value_str, "startup")) {
+				kind = NeuroSDK_MessageKind_StartupAcknowledgement;
+			} else if (JSON_STRING_EQUALS(value_str, "actions/reregister_all")) {
+				kind = NeuroSDK_MessageKind_ActionsReregisterAll;
 			} else {
 				LOG_ERROR(ctx, "[parse_s2c_json] Unknown command '%s'.",
 				          value_str->string);
@@ -406,7 +414,127 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 		goto cleanup;
 	}
 
-	if (kind == NeuroSDK_MessageKind_Action) {
+	if (kind == NeuroSDK_MessageKind_ActionsReregisterAll) {
+		if (root_data_count != 0) {
+			LOG_ERROR(ctx,
+			          "[parse_s2c_json] 'actions/reregister_all' must not contain "
+			          "a root 'data' field.");
+			res = NeuroSDK_InvalidMessage;
+			goto cleanup;
+		}
+		parsed.kind = kind;
+		*msg = parsed;
+	} else if (kind == NeuroSDK_MessageKind_StartupAcknowledgement) {
+		if (root_data_count != 1) {
+			LOG_ERROR(
+			    ctx,
+			    "[parse_s2c_json] Startup acknowledgement requires exactly one root "
+			    "'data' field.");
+			res = NeuroSDK_InvalidMessage;
+			goto cleanup;
+		}
+
+		root_elem = root_obj->start;
+		while (root_elem) {
+			if (JSON_STRING_EQUALS(root_elem->name, "data")) {
+				if (root_elem->value->type != json_type_object) {
+					LOG_ERROR(ctx, "[parse_s2c_json] Startup 'data' must be an object.");
+					res = NeuroSDK_InvalidMessage;
+					goto cleanup;
+				}
+				json_object_t *data_obj = (json_object_t *)root_elem->value->payload;
+				json_object_element_t *data_elem = data_obj->start;
+				json_object_t *session_obj = NULL;
+				bool session_found = false;
+				while (data_elem) {
+					if (JSON_STRING_EQUALS(data_elem->name, "session")) {
+						if (session_found || data_elem->value->type != json_type_object) {
+							LOG_ERROR(ctx,
+							          "[parse_s2c_json] Startup requires exactly one object "
+							          "'session' field.");
+							res = NeuroSDK_InvalidMessage;
+							goto cleanup;
+						}
+						session_found = true;
+						session_obj = (json_object_t *)data_elem->value->payload;
+					}
+					data_elem = data_elem->next;
+				}
+				if (!session_found) {
+					LOG_ERROR(ctx, "[parse_s2c_json] Startup is missing 'session'.");
+					res = NeuroSDK_InvalidMessage;
+					goto cleanup;
+				}
+
+				char *session_id = NULL, *character_id = NULL, *display_name = NULL;
+				bool session_id_found = false, character_id_found = false,
+				     display_name_found = false;
+				json_object_element_t *session_elem = session_obj->start;
+				while (session_elem) {
+					json_string_t *value = NULL;
+					char **destination = NULL;
+					bool *found = NULL;
+					if (JSON_STRING_EQUALS(session_elem->name, "sessionId")) {
+						found = &session_id_found;
+						destination = &session_id;
+					} else if (JSON_STRING_EQUALS(session_elem->name, "characterId")) {
+						found = &character_id_found;
+						destination = &character_id;
+					} else if (JSON_STRING_EQUALS(session_elem->name, "displayName")) {
+						found = &display_name_found;
+						destination = &display_name;
+					}
+					if (found) {
+						if (*found || session_elem->value->type != json_type_string) {
+							LOG_ERROR(ctx,
+							          "[parse_s2c_json] Startup session fields must be "
+							          "unique strings.");
+							res = NeuroSDK_InvalidMessage;
+							goto startup_cleanup;
+						}
+						*found = true;
+						value = (json_string_t *)session_elem->value->payload;
+						if (json_string_contains_nul(value)) {
+							LOG_ERROR(ctx,
+							          "[parse_s2c_json] Startup session strings must not "
+							          "contain null characters.");
+							res = NeuroSDK_InvalidMessage;
+							goto startup_cleanup;
+						}
+						*destination =
+						    duplicate_string_n(value->string, value->string_size);
+						if (!*destination) {
+							res = NeuroSDK_OutOfMemory;
+							goto startup_cleanup;
+						}
+					}
+					session_elem = session_elem->next;
+				}
+				if (!session_id_found || !character_id_found || !display_name_found) {
+					LOG_ERROR(ctx,
+					          "[parse_s2c_json] Startup session is missing required "
+					          "fields.");
+					res = NeuroSDK_InvalidMessage;
+					goto startup_cleanup;
+				}
+				parsed.kind = kind;
+				parsed.value.startup_acknowledgement =
+				    (neurosdk_message_startup_acknowledgement_t){
+				        .session_id = session_id,
+				        .character_id = character_id,
+				        .display_name = display_name,
+				    };
+				*msg = parsed;
+				goto cleanup;
+			startup_cleanup:
+				free(session_id);
+				free(character_id);
+				free(display_name);
+				goto cleanup;
+			}
+			root_elem = root_elem->next;
+		}
+	} else if (kind == NeuroSDK_MessageKind_Action) {
 		if (root_data_count != 1) {
 			LOG_ERROR(
 			    ctx,
@@ -1148,7 +1276,9 @@ neurosdk_message_destroy(neurosdk_message_t *msg) {
 	if (!msg) {
 		return NeuroSDK_Uninitialized;
 	}
-	if (msg->kind == NeuroSDK_MessageKind_Action) {
+	if (msg->kind == NeuroSDK_MessageKind_Action ||
+	    msg->kind == NeuroSDK_MessageKind_StartupAcknowledgement ||
+	    msg->kind == NeuroSDK_MessageKind_ActionsReregisterAll) {
 		message_cleanup(msg);
 	} else {
 		return NeuroSDK_UnknownCommand;
