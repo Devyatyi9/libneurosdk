@@ -247,9 +247,14 @@ if(NEURO_BUILD_EXAMPLES)
 	add_executable(reconnect_example examples/reconnect.c)
 	target_include_directories(reconnect_example PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 	target_link_libraries(reconnect_example PRIVATE ${PROJECT_NAME})
+
+	add_executable(rock_paper_scissors_example examples/rock_paper_scissors.c)
+	target_include_directories(rock_paper_scissors_example PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+	target_link_libraries(rock_paper_scissors_example PRIVATE ${PROJECT_NAME})
 	if(TARGET protocol_test_suite)
 		add_dependencies(protocol_test_suite
-			simple_example tictactoe_example reconnect_example)
+			simple_example tictactoe_example reconnect_example
+			rock_paper_scissors_example)
 	endif()
 endif()
 
