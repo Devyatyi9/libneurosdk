@@ -138,7 +138,8 @@ int main(void) {
 				neurosdk_message_destroy(&messages[i]);
 			}
 		}
-		usleep(500000);
+		if (!action_result_queued)
+			usleep(500000);
 	}
 
 	neurosdk_context_destroy(&ctx);
