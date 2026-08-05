@@ -355,7 +355,7 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 	}
 	if (root->type != json_type_object) {
 		LOG_ERROR(ctx, "[parse_s2c_json] Parsed JSON root is not an object.");
-		res = NeuroSDK_InvalidJSON;
+		res = NeuroSDK_InvalidMessage;
 		goto cleanup;
 	}
 
@@ -363,18 +363,26 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 	json_object_element_t *root_elem = root_obj->start;
 
 	neurosdk_message_kind_e kind = 0xFFFF;
+	bool command_found = false;
+	size_t root_data_count = 0;
 
 	while (root_elem) {
 		if (JSON_STRING_EQUALS(root_elem->name, "command")) {
+			if (command_found) {
+				LOG_ERROR(ctx, "[parse_s2c_json] Duplicate 'command' field.");
+				res = NeuroSDK_InvalidMessage;
+				goto cleanup;
+			}
+			command_found = true;
 			if (root_elem->value->type != json_type_string) {
 				LOG_ERROR(ctx, "[parse_s2c_json] 'command' field is not a string.");
-				res = NeuroSDK_InvalidJSON;
+				res = NeuroSDK_InvalidMessage;
 				goto cleanup;
 			}
 			json_string_t *value_str = (json_string_t *)root_elem->value->payload;
 			if (json_string_contains_nul(value_str)) {
 				LOG_ERROR(ctx, "[parse_s2c_json] 'command' contains a null character.");
-				res = NeuroSDK_InvalidJSON;
+				res = NeuroSDK_InvalidMessage;
 				goto cleanup;
 			}
 
@@ -386,44 +394,58 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 				res = NeuroSDK_UnknownCommand;
 				goto cleanup;
 			}
+		} else if (JSON_STRING_EQUALS(root_elem->name, "data")) {
+			root_data_count++;
 		}
 		root_elem = root_elem->next;
 	}
 
 	if (kind == 0xFFFF) {
 		LOG_ERROR(ctx, "[parse_s2c_json] Missing or invalid 'command' field.");
-		res = NeuroSDK_InvalidJSON;
+		res = NeuroSDK_InvalidMessage;
 		goto cleanup;
 	}
 
 	if (kind == NeuroSDK_MessageKind_Action) {
-		bool data_found = false;
+		if (root_data_count != 1) {
+			LOG_ERROR(
+			    ctx,
+			    "[parse_s2c_json] Action requires exactly one root 'data' field.");
+			res = NeuroSDK_InvalidMessage;
+			goto cleanup;
+		}
 		root_elem = root_obj->start;
 		while (root_elem) {
 			if (JSON_STRING_EQUALS(root_elem->name, "data")) {
-				data_found = true;
 				if (root_elem->value->type != json_type_object) {
 					LOG_ERROR(ctx, "[parse_s2c_json] 'data' field is not an object.");
-					res = NeuroSDK_InvalidJSON;
+					res = NeuroSDK_InvalidMessage;
 					goto cleanup;
 				}
 				json_object_t *data_obj = (json_object_t *)root_elem->value->payload;
 				json_object_element_t *obj_root = data_obj->start;
 
 				char *id = NULL, *name = NULL, *data = NULL;
+				bool id_found = false, name_found = false, action_data_found = false;
 
 				while (obj_root) {
 					if (JSON_STRING_EQUALS(obj_root->name, "id")) {
+						if (id_found) {
+							LOG_ERROR(ctx, "[parse_s2c_json] Duplicate action 'id' field.");
+							res = NeuroSDK_InvalidMessage;
+							goto parse_cleanup;
+						}
+						id_found = true;
 						if (obj_root->value->type != json_type_string) {
 							LOG_ERROR(ctx, "[parse_s2c_json] 'id' field must be a string.");
-							res = NeuroSDK_InvalidJSON;
+							res = NeuroSDK_InvalidMessage;
 							goto parse_cleanup;
 						}
 						json_string_t *str = (json_string_t *)obj_root->value->payload;
 						if (json_string_contains_nul(str)) {
 							LOG_ERROR(ctx,
 							          "[parse_s2c_json] 'id' contains a null character.");
-							res = NeuroSDK_InvalidJSON;
+							res = NeuroSDK_InvalidMessage;
 							goto parse_cleanup;
 						}
 						id = duplicate_string_n(str->string, str->string_size);
@@ -432,16 +454,22 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 							goto parse_cleanup;
 						}
 					} else if (JSON_STRING_EQUALS(obj_root->name, "name")) {
+						if (name_found) {
+							LOG_ERROR(ctx, "[parse_s2c_json] Duplicate action 'name' field.");
+							res = NeuroSDK_InvalidMessage;
+							goto parse_cleanup;
+						}
+						name_found = true;
 						if (obj_root->value->type != json_type_string) {
 							LOG_ERROR(ctx, "[parse_s2c_json] 'name' field must be a string.");
-							res = NeuroSDK_InvalidJSON;
+							res = NeuroSDK_InvalidMessage;
 							goto parse_cleanup;
 						}
 						json_string_t *str = (json_string_t *)obj_root->value->payload;
 						if (json_string_contains_nul(str)) {
 							LOG_ERROR(ctx,
 							          "[parse_s2c_json] 'name' contains a null character.");
-							res = NeuroSDK_InvalidJSON;
+							res = NeuroSDK_InvalidMessage;
 							goto parse_cleanup;
 						}
 						name = duplicate_string_n(str->string, str->string_size);
@@ -450,6 +478,12 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 							goto parse_cleanup;
 						}
 					} else if (JSON_STRING_EQUALS(obj_root->name, "data")) {
+						if (action_data_found) {
+							LOG_ERROR(ctx, "[parse_s2c_json] Duplicate action 'data' field.");
+							res = NeuroSDK_InvalidMessage;
+							goto parse_cleanup;
+						}
+						action_data_found = true;
 						if (obj_root->value->type == json_type_null) {
 							data = NULL;
 						} else if (obj_root->value->type == json_type_string) {
@@ -458,7 +492,7 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 								LOG_ERROR(ctx,
 								          "[parse_s2c_json] action 'data' contains a null "
 								          "character.");
-								res = NeuroSDK_InvalidJSON;
+								res = NeuroSDK_InvalidMessage;
 								goto parse_cleanup;
 							}
 							data = duplicate_string_n(str->string, str->string_size);
@@ -470,7 +504,7 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 							LOG_ERROR(
 							    ctx,
 							    "[parse_s2c_json] 'data' field must be a string or null.");
-							res = NeuroSDK_InvalidJSON;
+							res = NeuroSDK_InvalidMessage;
 							goto parse_cleanup;
 						}
 					}
@@ -481,7 +515,7 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 					LOG_ERROR(ctx,
 					          "[parse_s2c_json] 'data' object for 'action' must contain "
 					          "'id' and 'name'.");
-					res = NeuroSDK_InvalidJSON;
+					res = NeuroSDK_InvalidMessage;
 					goto parse_cleanup;
 				}
 
@@ -503,10 +537,6 @@ static neurosdk_error_e parse_s2c_json(context_t *ctx,
 				goto cleanup;
 			}
 			root_elem = root_elem->next;
-		}
-		if (!data_found) {
-			LOG_ERROR(ctx, "[parse_s2c_json] Missing 'data' field for 'action'.");
-			res = NeuroSDK_InvalidJSON;
 		}
 	} else {
 		LOG_ERROR(ctx, "[parse_s2c_json] Received an unhandled S2C command.");

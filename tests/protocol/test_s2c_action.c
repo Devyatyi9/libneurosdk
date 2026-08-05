@@ -79,44 +79,93 @@ static void test_utf8_action(void) {
 	CHECK(neurosdk_message_destroy(&queue[0]) == NeuroSDK_None);
 }
 
-static void test_invalid_action(char const *json) {
+static void test_invalid_action(char const *json,
+                                neurosdk_error_e expected_error) {
 	neurosdk_message_t queue[1] = {0};
 	context_t context = make_context(queue, 1);
 
 	receive(&context, json);
 
-	CHECK(context.conn_err == NeuroSDK_InvalidJSON);
-	CHECK(context.message_queue_size == 0);
+	if (context.conn_err != expected_error || context.message_queue_size != 0) {
+		fprintf(
+		    stderr,
+		    "Invalid action mismatch: expected error %d, got %d, queue %d: %s\n",
+		    expected_error, context.conn_err, context.message_queue_size, json);
+		failures++;
+	}
+	if (context.message_queue_size != 0)
+		neurosdk_message_destroy(&queue[0]);
 }
 
 static void test_invalid_actions(void) {
-	test_invalid_action("{\"command\":\"action\"}");
-	test_invalid_action("{\"command\":\"action\",\"data\":null}");
-	test_invalid_action("{\"command\":\"action\",\"data\":{\"name\":\"jump\"}}");
-	test_invalid_action("{\"command\":\"action\",\"data\":{\"id\":\"42\"}}");
+	test_invalid_action("{\"command\":\"action\"}", NeuroSDK_InvalidMessage);
+	test_invalid_action("{\"command\":\"action\",\"data\":null}",
+	                    NeuroSDK_InvalidMessage);
+	test_invalid_action("{\"command\":\"action\",\"data\":{\"name\":\"jump\"}}",
+	                    NeuroSDK_InvalidMessage);
+	test_invalid_action("{\"command\":\"action\",\"data\":{\"id\":\"42\"}}",
+	                    NeuroSDK_InvalidMessage);
 	test_invalid_action(
-	    "{\"command\":\"action\",\"data\":{\"id\":\"allocated\",\"name\":42}}");
+	    "{\"command\":\"action\",\"data\":{\"id\":\"allocated\",\"name\":42}}",
+	    NeuroSDK_InvalidMessage);
 	test_invalid_action(
 	    "{\"command\\u0000ignored\":\"action\",\"data\":{\"id\":\"42\",\"name\":"
-	    "\"jump\"}}");
+	    "\"jump\"}}",
+	    NeuroSDK_InvalidMessage);
 	test_invalid_action(
 	    "{\"command\":\"action\",\"data\\u0000ignored\":{\"id\":\"42\",\"name\":"
-	    "\"jump\"}}");
+	    "\"jump\"}}",
+	    NeuroSDK_InvalidMessage);
 	test_invalid_action(
 	    "{\"command\":\"action\",\"data\":{\"id\\u0000ignored\":\"42\",\"name\":"
-	    "\"jump\"}}");
+	    "\"jump\"}}",
+	    NeuroSDK_InvalidMessage);
 	test_invalid_action(
 	    "{\"command\":\"action\\u0000ignored\",\"data\":{\"id\":\"42\",\"name\":"
-	    "\"jump\"}}");
+	    "\"jump\"}}",
+	    NeuroSDK_InvalidMessage);
 	test_invalid_action(
 	    "{\"command\":\"action\",\"data\":{\"id\":\"42\\u0000ignored\",\"name\":"
-	    "\"jump\"}}");
+	    "\"jump\"}}",
+	    NeuroSDK_InvalidMessage);
 	test_invalid_action(
 	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":"
-	    "\"jump\\u0000ignored\"}}");
+	    "\"jump\\u0000ignored\"}}",
+	    NeuroSDK_InvalidMessage);
 	test_invalid_action(
 	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":\"jump\","
-	    "\"data\":\"{}\\u0000ignored\"}}");
+	    "\"data\":\"{}\\u0000ignored\"}}",
+	    NeuroSDK_InvalidMessage);
+}
+
+static void test_duplicate_fields(void) {
+	test_invalid_action(
+	    "{\"command\":\"action\",\"command\":\"action\",\"data\":{\"id\":\"42\","
+	    "\"name\":\"jump\"}}",
+	    NeuroSDK_InvalidMessage);
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":\"jump\"},"
+	    "\"data\":{\"id\":\"43\",\"name\":\"run\"}}",
+	    NeuroSDK_InvalidMessage);
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"id\":\"43\","
+	    "\"name\":\"jump\"}}",
+	    NeuroSDK_InvalidMessage);
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":\"jump\","
+	    "\"name\":\"run\"}}",
+	    NeuroSDK_InvalidMessage);
+	test_invalid_action(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"42\",\"name\":\"jump\","
+	    "\"data\":null,\"data\":\"{}\"}}",
+	    NeuroSDK_InvalidMessage);
+}
+
+static void test_error_classification(void) {
+	test_invalid_action("{", NeuroSDK_InvalidJSON);
+	test_invalid_action("[]", NeuroSDK_InvalidMessage);
+	test_invalid_action("{\"command\":\"future/command\"}",
+	                    NeuroSDK_UnknownCommand);
 }
 
 static void test_raw_nul(void) {
@@ -131,7 +180,8 @@ static void test_raw_nul(void) {
 	CHECK(context.message_queue_size == 0);
 }
 
-static void check_parse_is_transactional(char const *json) {
+static void check_parse_is_transactional(char const *json,
+                                         neurosdk_error_e expected_error) {
 	context_t context = {0};
 	neurosdk_message_t expected = {
 	    .kind = NeuroSDK_MessageKind_ActionResult,
@@ -145,14 +195,20 @@ static void check_parse_is_transactional(char const *json) {
 	neurosdk_message_t actual = expected;
 
 	CHECK(parse_s2c_json(&context, &actual, json, strlen(json)) ==
-	      NeuroSDK_InvalidJSON);
+	      expected_error);
 	CHECK(memcmp(&actual, &expected, sizeof(actual)) == 0);
 }
 
 static void test_parse_is_transactional(void) {
-	check_parse_is_transactional("{\"command\":\"action\"}");
+	check_parse_is_transactional("{\"command\":\"action\"}",
+	                             NeuroSDK_InvalidMessage);
 	check_parse_is_transactional(
-	    "{\"command\":\"action\",\"data\":{\"id\":\"allocated\",\"name\":42}}");
+	    "{\"command\":\"action\",\"data\":{\"id\":\"allocated\",\"name\":42}}",
+	    NeuroSDK_InvalidMessage);
+	check_parse_is_transactional(
+	    "{\"command\":\"action\",\"data\":{\"id\":\"allocated\",\"id\":\"again\","
+	    "\"name\":\"jump\"}}",
+	    NeuroSDK_InvalidMessage);
 }
 
 static void test_queue_full(void) {
@@ -231,6 +287,8 @@ int main(void) {
 	test_null_action_data();
 	test_utf8_action();
 	test_invalid_actions();
+	test_duplicate_fields();
+	test_error_classification();
 	test_raw_nul();
 	test_parse_is_transactional();
 	test_queue_full();
