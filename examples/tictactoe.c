@@ -1,6 +1,8 @@
 #ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS
 #endif
+#include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +44,44 @@ bool board_full(char board[9]) {
 	return true;
 }
 
+static void skip_spaces(char const **cursor) {
+	while (**cursor == ' ' || **cursor == '\t' || **cursor == '\r' ||
+	       **cursor == '\n')
+		(*cursor)++;
+}
+
+static bool parse_move(char const *data, int *move) {
+	if (!data)
+		return false;
+	char const *cursor = data;
+	skip_spaces(&cursor);
+	if (*cursor++ != '{')
+		return false;
+	skip_spaces(&cursor);
+	if (strncmp(cursor, "\"move\"", 6) != 0)
+		return false;
+	cursor += 6;
+	skip_spaces(&cursor);
+	if (*cursor++ != ':')
+		return false;
+	skip_spaces(&cursor);
+
+	errno = 0;
+	char *end = NULL;
+	long value = strtol(cursor, &end, 10);
+	if (end == cursor || errno == ERANGE || value < INT_MIN || value > INT_MAX)
+		return false;
+	cursor = end;
+	skip_spaces(&cursor);
+	if (*cursor++ != '}')
+		return false;
+	skip_spaces(&cursor);
+	if (*cursor != '\0')
+		return false;
+	*move = (int)value;
+	return true;
+}
+
 int main(void) {
 	neurosdk_context_t ctx;
 	neurosdk_context_create_desc_t desc = {
@@ -64,6 +104,7 @@ int main(void) {
 	startup_msg.kind = NeuroSDK_MessageKind_Startup;
 	if ((err = neurosdk_context_send(&ctx, &startup_msg)) != NeuroSDK_None) {
 		printf("Failed to send startup message: %s\n", neurosdk_error_string(err));
+		neurosdk_context_destroy(&ctx);
 		return 1;
 	}
 
@@ -78,6 +119,7 @@ int main(void) {
 	};
 	if ((err = neurosdk_context_send(&ctx, &context_msg)) != NeuroSDK_None) {
 		printf("Failed to send context message: %s\n", neurosdk_error_string(err));
+		neurosdk_context_destroy(&ctx);
 		return 1;
 	}
 
@@ -88,9 +130,15 @@ int main(void) {
 	    .description = "Your move. Choose an empty cell index (0-8).",
 	    .json_schema =
 	        "{"
-	        "  \"type\": \"integer\","
-	        "  \"minimum\": 0,"
-	        "  \"maximum\": 8"
+	        "  \"type\": \"object\","
+	        "  \"properties\": {"
+	        "    \"move\": {"
+	        "      \"type\": \"integer\","
+	        "      \"minimum\": 0,"
+	        "      \"maximum\": 8"
+	        "    }"
+	        "  },"
+	        "  \"required\": [\"move\"]"
 	        "}",
 	};
 	register_msg.value.actions_register.actions = &move_action;
@@ -98,6 +146,7 @@ int main(void) {
 
 	if ((err = neurosdk_context_send(&ctx, &register_msg)) != NeuroSDK_None) {
 		printf("Failed to register actions: %s\n", neurosdk_error_string(err));
+		neurosdk_context_destroy(&ctx);
 		return 1;
 	}
 
@@ -136,7 +185,11 @@ int main(void) {
 			char *action_names[1] = {"move"};
 			force_msg.value.actions_force.action_names = action_names;
 			force_msg.value.actions_force.action_names_len = 1;
-			neurosdk_context_send(&ctx, &force_msg);
+			err = neurosdk_context_send(&ctx, &force_msg);
+			if (err != NeuroSDK_None) {
+				printf("Failed to force action: %s\n", neurosdk_error_string(err));
+				break;
+			}
 
 			bool move_received = false;
 			while (!move_received) {
@@ -151,8 +204,7 @@ int main(void) {
 					if (messages[i].kind == NeuroSDK_MessageKind_Action) {
 						char *data_str = messages[i].value.action.data;
 						int neuro_move = -1;
-						if (data_str != NULL)
-							neuro_move = atoi(data_str);
+						parse_move(data_str, &neuro_move);
 						neurosdk_message_t action_result;
 						action_result.kind = NeuroSDK_MessageKind_ActionResult;
 						action_result.value.action_result.id = messages[i].value.action.id;
@@ -160,20 +212,27 @@ int main(void) {
 							action_result.value.action_result.success = false;
 							action_result.value.action_result.message =
 							    "Invalid move. Try again.";
-							neurosdk_context_send(&ctx, &action_result);
+							err = neurosdk_context_send(&ctx, &action_result);
 						} else {
 							board[neuro_move] = NEURO;
 							action_result.value.action_result.success = true;
 							action_result.value.action_result.message = "Move accepted.";
-							neurosdk_context_send(&ctx, &action_result);
-							move_received = true;
-							break;
+							err = neurosdk_context_send(&ctx, &action_result);
+							if (err == NeuroSDK_None)
+								move_received = true;
 						}
+						if (err != NeuroSDK_None)
+							printf("Failed to send action result: %s\n",
+							       neurosdk_error_string(err));
 					}
 				}
 				for (int i = 0; i < count; i++)
 					neurosdk_message_destroy(&messages[i]);
+				if (err != NeuroSDK_None)
+					break;
 			}
+			if (!move_received)
+				break;
 		}
 
 		int winner = check_win(board);

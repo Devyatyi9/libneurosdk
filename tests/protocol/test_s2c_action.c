@@ -141,6 +141,31 @@ static void test_startup_acknowledgement(void) {
 	CHECK(queue[0].kind == NeuroSDK_MessageKind_Unknown);
 }
 
+static void test_duplicate_startup_acknowledgements(void) {
+	neurosdk_message_t queue[2] = {0};
+	context_t context = make_context(queue, 2);
+	static char const first[] =
+	    "{\"command\":\"startup\",\"data\":{\"session\":{"
+	    "\"sessionId\":\"first\",\"characterId\":\"neuro\","
+	    "\"displayName\":\"Neuro-sama\"}}}";
+	static char const second[] =
+	    "{\"command\":\"startup\",\"data\":{\"session\":{"
+	    "\"sessionId\":\"second\",\"characterId\":\"evil\","
+	    "\"displayName\":\"Evil Neuro\"}}}";
+
+	receive(&context, first);
+	receive(&context, second);
+
+	CHECK(context.conn_err == NeuroSDK_None);
+	CHECK(context.message_queue_size == 2);
+	CHECK(strcmp(queue[0].value.startup_acknowledgement.session_id, "first") ==
+	      0);
+	CHECK(strcmp(queue[1].value.startup_acknowledgement.session_id, "second") ==
+	      0);
+	CHECK(neurosdk_message_destroy(&queue[0]) == NeuroSDK_None);
+	CHECK(neurosdk_message_destroy(&queue[1]) == NeuroSDK_None);
+}
+
 static void test_reregister_all(void) {
 	neurosdk_message_t queue[1] = {0};
 	context_t context = make_context(queue, 1);
@@ -503,6 +528,7 @@ int main(void) {
 	test_utf8_action();
 	test_unicode_action();
 	test_startup_acknowledgement();
+	test_duplicate_startup_acknowledgements();
 	test_reregister_all();
 	test_invalid_actions();
 	test_duplicate_fields();

@@ -231,6 +231,10 @@ if(NEURO_BUILD_EXAMPLES)
 	add_executable(tictactoe_example examples/tictactoe.c)
 	target_include_directories(tictactoe_example PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 	target_link_libraries(tictactoe_example PRIVATE ${PROJECT_NAME})
+
+	add_executable(reconnect_example examples/reconnect.c)
+	target_include_directories(reconnect_example PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+	target_link_libraries(reconnect_example PRIVATE ${PROJECT_NAME})
 endif()
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/neurosdk.pc

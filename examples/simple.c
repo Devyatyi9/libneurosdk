@@ -39,6 +39,13 @@ int main(void) {
 	}
 
 	printf("Connected to Neuro!\n");
+	neurosdk_message_t startup_msg = {.kind = NeuroSDK_MessageKind_Startup};
+	err = neurosdk_context_send(&ctx, &startup_msg);
+	if (err != NeuroSDK_None) {
+		printf("Failed to send startup: %s\n", neurosdk_error_string(err));
+		neurosdk_context_destroy(&ctx);
+		return 1;
+	}
 
 	neurosdk_action_t action = {.name = "choose_name",
 	                            .description = "Pick a username",
@@ -81,11 +88,13 @@ int main(void) {
 				if (messages[i].kind == NeuroSDK_MessageKind_Action) {
 					printf("- ID: %s\n", messages[i].value.action.id);
 					printf("- Name: %s\n", messages[i].value.action.name);
-					printf("- Data: %s\n", messages[i].value.action.data);
+					printf("- Data: %s\n", messages[i].value.action.data
+					                           ? messages[i].value.action.data
+					                           : "(null)");
 
 					neurosdk_message_t res_msg = {.kind =
 					                                  NeuroSDK_MessageKind_ActionResult};
-					res_msg.value.action_result.id = "choose_name";
+					res_msg.value.action_result.id = messages[i].value.action.id;
 					res_msg.value.action_result.success = true;
 					res_msg.value.action_result.message = "Action executed successfully";
 
@@ -93,6 +102,8 @@ int main(void) {
 					if (err != NeuroSDK_None) {
 						printf("Failed to send preemptive action result: %s\n",
 						       neurosdk_error_string(err));
+						for (int j = 0; j < count; j++)
+							neurosdk_message_destroy(&messages[j]);
 						neurosdk_context_destroy(&ctx);
 						return 1;
 					}
