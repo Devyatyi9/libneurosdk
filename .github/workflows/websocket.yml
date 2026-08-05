@@ -2,8 +2,26 @@ name: Test and Build WebSocket Layer
 
 on:
   workflow_dispatch:
-  #push:
-  #pull_request:
+  push:
+    paths:
+      - .github/workflows/websocket.yml
+      - CMakeLists.txt
+      - src/ws_client.c
+      - src/ws_client.h
+      - src/ws_deflate.c
+      - src/ws_deflate.h
+      - tests/websocket/**
+      - vendor/miniz/**
+  pull_request:
+    paths:
+      - .github/workflows/websocket.yml
+      - CMakeLists.txt
+      - src/ws_client.c
+      - src/ws_client.h
+      - src/ws_deflate.c
+      - src/ws_deflate.h
+      - tests/websocket/**
+      - vendor/miniz/**
 
 jobs:
   test:
