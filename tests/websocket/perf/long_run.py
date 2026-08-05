@@ -15,6 +15,16 @@ import subprocess, sys, time, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from test_utils import build_env, find_echo_test
 
+def print_output(stdout, stderr):
+    for name, output in (("stdout", stdout), ("stderr", stderr)):
+        if not output:
+            continue
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        print(f"--- client {name} ---")
+        print(output.rstrip())
+        print(f"--- end client {name} ---")
+
 def main():
     url = sys.argv[1] if len(sys.argv) > 1 else "ws://127.0.0.1:9001/"
     hours = float(sys.argv[2]) if len(sys.argv) > 2 else 3.0
@@ -35,9 +45,10 @@ def main():
         try:
             r = subprocess.run([exe, url], timeout=timeout, capture_output=True, env=build_env(exe))
             rc = r.returncode
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             rc = -1
             status = "HUNG"
+            print_output(e.stdout, e.stderr)
         except Exception as e:
             rc = -2
             status = f"EXCEPTION ({e})"
@@ -50,6 +61,8 @@ def main():
         print(f"[{iterations:6d}] {status}  ({elapsed:.1f}s, "
               f"{remaining/3600:.1f}h left)")
         if rc != 0:
+            if rc >= 0:
+                print_output(r.stdout, r.stderr)
             consecutive_fails += 1
             if consecutive_fails >= max_fails:
                 print(f"Aborting after {max_fails} consecutive failures")
