@@ -1,0 +1,75 @@
+name: Test Neuro Protocol
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/protocol.yml
+      - CMakeLists.txt
+      - include/**
+      - src/**
+      - tests/protocol/**
+      - vendor/json.h
+      - vendor/tinycthread/**
+  pull_request:
+    paths:
+      - .github/workflows/protocol.yml
+      - CMakeLists.txt
+      - include/**
+      - src/**
+      - tests/protocol/**
+      - vendor/json.h
+      - vendor/tinycthread/**
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux GCC
+            os: ubuntu-latest
+            cc: gcc
+            cxx: g++
+            sanitize: false
+          - name: Linux Clang ASan UBSan
+            os: ubuntu-latest
+            cc: clang
+            cxx: clang++
+            sanitize: true
+          - name: macOS AppleClang
+            os: macos-latest
+            cc: clang
+            cxx: clang++
+            sanitize: false
+          - name: Windows MSVC
+            os: windows-latest
+            sanitize: false
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows-latest' && 'pwsh' || 'bash' }}
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Set up MSVC
+      if: matrix.os == 'windows-latest'
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Configure CMake
+      env:
+        CC: ${{ matrix.cc || '' }}
+        CXX: ${{ matrix.cxx || '' }}
+      run: cmake -B build -DNEURO_BUILD_TESTS=ON -DNEURO_WARNINGS_AS_ERRORS=ON ${{ matrix.sanitize && '-DNEURO_SANITIZE=ON' || '' }}
+
+    - name: Build protocol tests
+      run: cmake --build build --config Release --target protocol_test_suite
+
+    - name: Run protocol tests
+      run: |
+        ${{ matrix.os == 'windows-latest' && 'build/Release/test_c2s_json.exe' || './build/test_c2s_json' }}
+        ${{ matrix.os == 'windows-latest' && 'build/Release/test_s2c_action.exe' || './build/test_s2c_action' }}

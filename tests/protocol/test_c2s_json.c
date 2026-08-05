@@ -16,8 +16,8 @@ static void check(bool condition, int line, char const *expression) {
 #define CHECK(condition) check((condition), __LINE__, #condition)
 
 static void check_json(context_t const *context,
-	                   neurosdk_message_t const *message,
-	                   char const *expected) {
+                       neurosdk_message_t const *message,
+                       char const *expected) {
 	char *json = NULL;
 	CHECK(build_c2s_json(context, message, &json) == NeuroSDK_None);
 	CHECK(json != NULL);
@@ -38,9 +38,9 @@ static void test_all_message_kinds(void) {
 	check_json(&context, &message,
 	           "{\"command\":\"startup\",\"game\":\"game\\\"\\\\\\n\"}");
 
-	message = (neurosdk_message_t){.kind = NeuroSDK_MessageKind_Context,
-	                                .value.context = {.message = "\b\f\r\t\1",
-	                                                  .silent = true}};
+	message = (neurosdk_message_t){
+	    .kind = NeuroSDK_MessageKind_Context,
+	    .value.context = {.message = "\b\f\r\t\1", .silent = true}};
 	check_json(&context, &message,
 	           "{\"command\":\"context\",\"game\":\"game\\\"\\\\\\n\","
 	           "\"data\":{\"message\":\"\\b\\f\\r\\t\\u0001\","
@@ -48,7 +48,9 @@ static void test_all_message_kinds(void) {
 
 	neurosdk_action_t actions[] = {
 	    {.name = "jump\"", .description = NULL, .json_schema = NULL},
-	    {.name = "look", .description = "left\\right", .json_schema = "{ \"type\" : \"object\" }"},
+	    {.name = "look",
+	     .description = "left\\right",
+	     .json_schema = "{ \"type\" : \"object\" }"},
 	};
 	message = (neurosdk_message_t){
 	    .kind = NeuroSDK_MessageKind_ActionsRegister,
@@ -61,9 +63,10 @@ static void test_all_message_kinds(void) {
 	           "\"object\" }}]}}");
 
 	char *names[] = {"one\"", "two\\"};
-	message = (neurosdk_message_t){
-	    .kind = NeuroSDK_MessageKind_ActionsUnregister,
-	    .value.actions_unregister = {.action_names = names, .action_names_len = 2}};
+	message =
+	    (neurosdk_message_t){.kind = NeuroSDK_MessageKind_ActionsUnregister,
+	                         .value.actions_unregister = {.action_names = names,
+	                                                      .action_names_len = 2}};
 	check_json(&context, &message,
 	           "{\"command\":\"actions/unregister\",\"game\":\"game\\\"\\\\\\n\","
 	           "\"data\":{\"action_names\":[\"one\\\"\",\"two\\\\\"]}}");
@@ -109,7 +112,7 @@ static void test_utf8_and_validation(void) {
 	static char const utf8[] = "\320\277\321\200\320\270\320\262\320\265\321\202";
 	context_t context = {.game_name = utf8};
 	neurosdk_message_t message = {.kind = NeuroSDK_MessageKind_Context,
-	                                .value.context = {.message = (char *)utf8}};
+	                              .value.context = {.message = (char *)utf8}};
 	char expected[256];
 	snprintf(expected, sizeof(expected),
 	         "{\"command\":\"context\",\"game\":\"%s\",\"data\":{"
@@ -134,9 +137,10 @@ static void test_utf8_and_validation(void) {
 	CHECK(build_c2s_json(&context, &message, &json) == NeuroSDK_InvalidMessage);
 
 	char *names[] = {NULL};
-	message = (neurosdk_message_t){
-	    .kind = NeuroSDK_MessageKind_ActionsUnregister,
-	    .value.actions_unregister = {.action_names = names, .action_names_len = 1}};
+	message =
+	    (neurosdk_message_t){.kind = NeuroSDK_MessageKind_ActionsUnregister,
+	                         .value.actions_unregister = {.action_names = names,
+	                                                      .action_names_len = 1}};
 	CHECK(build_c2s_json(&context, &message, &json) == NeuroSDK_InvalidMessage);
 }
 
@@ -149,7 +153,7 @@ static void test_size_limit(void) {
 	memset(large, 'a', PROTOCOL_MESSAGE_MAX_SIZE - 1);
 	large[PROTOCOL_MESSAGE_MAX_SIZE - 1] = '\0';
 	neurosdk_message_t message = {.kind = NeuroSDK_MessageKind_Context,
-	                                .value.context = {.message = large}};
+	                              .value.context = {.message = large}};
 	char *json = NULL;
 	CHECK(build_c2s_json(&context, &message, &json) == NeuroSDK_InvalidMessage);
 	CHECK(json == NULL);

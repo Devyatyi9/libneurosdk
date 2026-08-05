@@ -97,6 +97,14 @@ typedef void (*neurosdk_callback_log_t)(neurosdk_severity_e severity,
 // Data Structures //
 /////////////////////
 
+// String encoding contract:
+// - Every C string supplied by the application must be NUL-terminated UTF-8.
+// - Convert UTF-16, wchar_t, and other application encodings to UTF-8 before
+//   calling the SDK. Invalid UTF-8 in an outgoing message is rejected with
+//   NeuroSDK_InvalidMessage.
+// - String fields in messages returned by the SDK are NUL-terminated UTF-8 and
+//   remain owned by that message until neurosdk_message_destroy() is called.
+
 // Action Definition
 typedef struct neurosdk_action {
 	char *name;
