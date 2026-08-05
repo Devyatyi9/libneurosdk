@@ -120,8 +120,8 @@ static void test_utf8_and_validation(void) {
 	         utf8, utf8);
 	check_json(&context, &message, expected);
 
-	char invalid_utf8[] = {(char)0xC0, (char)0xAF, '\0'};
-	message.value.context.message = invalid_utf8;
+	unsigned char invalid_utf8[] = {0xC0, 0xAF, '\0'};
+	message.value.context.message = (char *)invalid_utf8;
 	char *json = NULL;
 	CHECK(build_c2s_json(&context, &message, &json) == NeuroSDK_InvalidMessage);
 	CHECK(json == NULL);

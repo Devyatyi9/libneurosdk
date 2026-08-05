@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/protocol.yml
       - CMakeLists.txt
+      - examples/**
       - include/**
       - src/**
       - tests/protocol/**
@@ -15,6 +16,7 @@ on:
     paths:
       - .github/workflows/protocol.yml
       - CMakeLists.txt
+      - examples/**
       - include/**
       - src/**
       - tests/protocol/**
