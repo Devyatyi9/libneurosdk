@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build, start uWS echo-server and run echo_test against it."""
-import os, socket, subprocess, sys, time
+import os, shutil, socket, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..", "..")
@@ -37,8 +37,10 @@ def main():
         ], timeout=600)
         build_name = "build"
         if sys.platform == "win32":
-            vcpkg_bin = subprocess.check_output(
-                ["where", "vcpkg"], text=True, timeout=30).splitlines()[0].strip()
+            vcpkg_bin = shutil.which("vcpkg")
+            if not vcpkg_bin:
+                print("vcpkg was not found on PATH")
+                return 1
             vcpkg_root = os.path.dirname(vcpkg_bin)
             target_arch = os.environ.get("VSCMD_ARG_TGT_ARCH", "x64").lower()
             arch = "x86" if target_arch in ("x86", "win32") else "x64"
@@ -60,7 +62,6 @@ def main():
         src = os.path.join(build_dir, "Release" if sys.platform == "win32" else "",
                            "uws_echo.exe" if sys.platform == "win32" else "uws_echo")
         if os.path.isfile(src):
-            import shutil
             shutil.copy2(src, uws_bin)
 
     # Start uWS echo-server
