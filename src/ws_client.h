@@ -4,6 +4,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Keep static SDK dependency directives with the networking implementation.
+// MSVC records them in ws_client.obj.
+#if defined(_WIN32) && defined(_MSC_VER)
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "bcrypt.lib")
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
