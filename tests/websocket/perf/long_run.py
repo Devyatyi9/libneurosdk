@@ -39,6 +39,7 @@ def main():
     print()
 
     iterations = 0
+    total_failures = 0
     consecutive_fails = 0
     while time.time() < end:
         t0 = time.time()
@@ -63,6 +64,7 @@ def main():
         if rc != 0:
             if rc >= 0:
                 print_output(r.stdout, r.stderr)
+            total_failures += 1
             consecutive_fails += 1
             if consecutive_fails >= max_fails:
                 print(f"Aborting after {max_fails} consecutive failures")
@@ -70,7 +72,9 @@ def main():
         else:
             consecutive_fails = 0
 
-    print(f"\nDone: {iterations} iterations, 0 failures")
+    print(f"\nDone: {iterations} iterations, {total_failures} failures")
+    if total_failures:
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
