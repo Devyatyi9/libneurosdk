@@ -11,7 +11,8 @@ on:
       - src/**
       - tests/protocol/**
       - vendor/json.h
-      - vendor/tinycthread/**
+      - vendor/tinycthread.c
+      - vendor/tinycthread.h
   pull_request:
     paths:
       - .github/workflows/protocol.yml
@@ -21,7 +22,8 @@ on:
       - src/**
       - tests/protocol/**
       - vendor/json.h
-      - vendor/tinycthread/**
+      - vendor/tinycthread.c
+      - vendor/tinycthread.h
 
 jobs:
   test:
