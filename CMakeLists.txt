@@ -166,6 +166,7 @@ if(NEURO_BUILD_TESTS)
 		${CMAKE_CURRENT_SOURCE_DIR}/vendor
 		${CMAKE_CURRENT_SOURCE_DIR}/src
 	)
+	# test_s2c_action includes neurosdk.c directly to exercise internal parsing.
 	target_compile_definitions(test_s2c_action PRIVATE
 		LIB_VERSION=${PROJECT_VERSION}
 		LIB_BUILD_HASH=${LIB_BUILD_HASH}
@@ -175,11 +176,7 @@ if(NEURO_BUILD_TESTS)
 	target_include_directories(test_c2s_json PRIVATE
 		${CMAKE_CURRENT_SOURCE_DIR}/include
 		${CMAKE_CURRENT_SOURCE_DIR}/src
-		${CMAKE_CURRENT_SOURCE_DIR}/vendor
-		${CMAKE_CURRENT_SOURCE_DIR}/vendor/tinycthread/source)
-	target_compile_definitions(test_c2s_json PRIVATE
-		LIB_VERSION="${PROJECT_VERSION}"
-		LIB_BUILD_HASH="${LIB_BUILD_HASH}")
+		${CMAKE_CURRENT_SOURCE_DIR}/vendor)
 	target_link_libraries(test_c2s_json PRIVATE ws_client_test)
 	add_executable(protocol_interop_client tests/protocol/interop_client.c)
 	target_link_libraries(protocol_interop_client PRIVATE ${PROJECT_NAME})

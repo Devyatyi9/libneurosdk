@@ -4,7 +4,7 @@
 Starts uWS echo-server behind nginx, runs echo_test client through the proxy,
 then does the same via the ws:// nginx endpoint.
 """
-import os, subprocess, sys, tempfile, time
+import os, shutil, socket, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..", "..")
@@ -26,11 +26,19 @@ def find_nginx():
         for p in ("/usr/sbin/nginx", "/usr/local/bin/nginx", "/opt/homebrew/bin/nginx"):
             if os.path.isfile(p):
                 return p
-    which = "where" if sys.platform == "win32" else "which"
-    try:
-        return subprocess.check_output([which, "nginx"], text=True).strip().splitlines()[0]
-    except subprocess.CalledProcessError:
-        return None
+    return shutil.which("nginx")
+
+
+def wait_for_port(port, timeout=10):
+    """Wait until a local TCP listener accepts connections."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return True
+        except OSError:
+            time.sleep(0.1)
+    return False
 
 
 NGINX_CONF = """
@@ -102,7 +110,16 @@ def main():
     upstream = subprocess.Popen([uws_bin, str(upstream_port)],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 env=uws_env)
-    time.sleep(2)
+    if not wait_for_port(upstream_port):
+        if upstream.poll() is None:
+            upstream.terminate()
+        try:
+            upstream.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            upstream.kill()
+            upstream.wait(timeout=10)
+        print("uWS did not start on upstream port")
+        return 1
 
     conf_data = NGINX_CONF.format(proxy_port=proxy_port,
                                   upstream_port=upstream_port)
@@ -127,24 +144,8 @@ def main():
             [nginx_bin, "-p", nginx_prefix, "-c", conf_path],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
-    time.sleep(2)
-
     # Ensure proxy port is reachable
-    import socket
-    ok = False
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        try:
-            s = socket.socket()
-            s.settimeout(1)
-            s.connect(("127.0.0.1", proxy_port))
-            s.close()
-            ok = True
-            break
-        except (ConnectionRefusedError, OSError):
-            time.sleep(0.3)
-
-    if not ok:
+    if not wait_for_port(proxy_port):
         nginx.terminate()
         try:
             _, stderr = nginx.communicate(timeout=10)
