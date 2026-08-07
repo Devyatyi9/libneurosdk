@@ -9,7 +9,7 @@ option(NEURO_BUILD_TESTS "Build test executables" OFF)
 option(NEURO_BUILD_EXAMPLES "Build example executables" OFF)
 option(NEURO_SANITIZE "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(NEURO_WARNINGS_AS_ERRORS "Treat project compiler warnings as errors" OFF)
-option(ENABLE_PERMESSAGE_DEFLATE "Build the internal RFC 7692 codec" ON)
+option(ENABLE_PERMESSAGE_DEFLATE "Build the internal RFC 7692 codec" OFF)
 
 if(NEURO_SANITIZE)
 	if(MSVC)
